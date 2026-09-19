@@ -5,8 +5,15 @@ on:
   push:
     branches: [main]
     paths:
+      - 'index.html'
+      - 'styles.css'
+      - 'app.js'
       - '.github/workflows/preview.yml'
       - '.preview-trigger'
+
+concurrency:
+  group: camera-control-live-preview
+  cancel-in-progress: true
 
 permissions:
   contents: read
