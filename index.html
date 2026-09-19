@@ -17,15 +17,15 @@
 <body>
 <main class="app">
   <header class="topbar">
-    <strong>Camera Control</strong>
+    <strong class="brand"><span class="brand-mark" aria-hidden="true">◇</span><span>CameraControl3D</span></strong>
 
     <div class="top-center">
       <select id="shots" aria-label="Shot"></select>
     </div>
 
     <div class="top-actions">
-      <button id="homeView" type="button">Navigate</button>
-      <button id="importGlb" type="button">Import</button>
+      <button id="homeView" type="button">Explore</button>
+      <button id="importGlb" type="button">Import scene</button>
       <button id="advancedToggle" type="button" aria-expanded="false">•••</button>
       <input id="importGlbInput" class="file-input" type="file" accept=".glb,model/gltf-binary">
     </div>
@@ -56,7 +56,7 @@
       </div>
 
       <div class="statusbar">
-        <span id="status">DRAG ANYWHERE</span>
+        <span id="status">DRAW A 3D LINE</span>
       </div>
 
       <div class="loading" id="loading">Building 3D room…</div>
