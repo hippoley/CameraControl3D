@@ -328,37 +328,26 @@ livePathLine.renderOrder=3;
 livePathDots.renderOrder=3;
 scene.add(authoredPathLine,authoredPathDots,livePathLine,livePathDots);
 
-function makeFrustumGlyph(color,scale=1){
+function makeFrustumGlyph(color,scale=1,selected=false){
   const group=new THREE.Group();
-  const d=.82*scale,w=.50*scale,h=.30*scale;
-  const bW=.24*scale,bH=.17*scale,bD=.24*scale;
+  const d=.78*scale,w=.47*scale,h=.285*scale;
+  const bW=.20*scale,bH=.145*scale,bD=.20*scale;
   const verts=[
-    // pyramid / viewing cone
     0,0,0, -w,-h,-d,
     0,0,0,  w,-h,-d,
     0,0,0,  w, h,-d,
     0,0,0, -w, h,-d,
-    // far rectangle
     -w,-h,-d,  w,-h,-d,
      w,-h,-d,  w, h,-d,
      w, h,-d, -w, h,-d,
-    -w, h,-d, -w,-h,-d,
-    // small camera body behind the optical center
-    -bW,-bH,bD,  bW,-bH,bD,
-     bW,-bH,bD,  bW, bH,bD,
-     bW, bH,bD, -bW, bH,bD,
-    -bW, bH,bD, -bW,-bH,bD,
-    -bW,-bH,bD, -bW,-bH,0,
-     bW,-bH,bD,  bW,-bH,0,
-     bW, bH,bD,  bW, bH,0,
-    -bW, bH,bD, -bW, bH,0
+    -w, h,-d, -w,-h,-d
   ];
   const geometry=new THREE.BufferGeometry();
   geometry.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
   const material=new THREE.LineBasicMaterial({
     color,
     transparent:true,
-    opacity:.92,
+    opacity:selected?.98:.68,
     depthTest:true,
     depthWrite:false
   });
@@ -366,20 +355,95 @@ function makeFrustumGlyph(color,scale=1){
   lines.renderOrder=5;
   group.add(lines);
 
-  const apex=new THREE.Mesh(
-    new THREE.SphereGeometry(.055*scale,12,8),
-    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.98,depthTest:true,depthWrite:false})
+  const shadeGeometry=new THREE.BufferGeometry();
+  shadeGeometry.setAttribute('position',new THREE.Float32BufferAttribute([
+    0,0,0, -w,-h,-d,  w,-h,-d,
+    0,0,0,  w,-h,-d,  w, h,-d,
+    0,0,0,  w, h,-d, -w, h,-d,
+    0,0,0, -w, h,-d, -w,-h,-d
+  ],3));
+  const shade=new THREE.Mesh(
+    shadeGeometry,
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent:true,
+      opacity:selected?.11:.045,
+      side:THREE.DoubleSide,
+      depthWrite:false,
+      depthTest:true,
+      blending:THREE.AdditiveBlending
+    })
   );
-  apex.renderOrder=5;
-  group.add(apex);
+  shade.renderOrder=4;
+  group.add(shade);
+
+  const body=new THREE.Mesh(
+    new THREE.BoxGeometry(bW*2,bH*2,bD),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent:true,
+      opacity:selected?.34:.18,
+      depthWrite:false,
+      depthTest:true
+    })
+  );
+  body.position.z=bD*.55;
+  body.renderOrder=5;
+  group.add(body);
+
+  const lens=new THREE.Mesh(
+    new THREE.RingGeometry(.07*scale,.105*scale,24),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent:true,
+      opacity:selected?1:.76,
+      side:THREE.DoubleSide,
+      depthWrite:false,
+      depthTest:true
+    })
+  );
+  lens.position.z=-.012;
+  lens.renderOrder=6;
+  group.add(lens);
+
   group.userData.lines=lines;
+  group.userData.frustumDepth=d;
+  group.userData.frustumWidth=w;
   return group;
 }
-const startFrustum=makeFrustumGlyph(0xc78cff,.72);
-const endFrustum=makeFrustumGlyph(0xffd66f,.86);
-const liveFrustum=makeFrustumGlyph(0xffe08b,.92);
-const frustumAimCamera=new THREE.PerspectiveCamera(52,1.6,.05,80);
-scene.add(startFrustum,endFrustum,liveFrustum);
+const startFrustum=makeFrustumGlyph(0xb693ff,.66,false);
+const endFrustum=makeFrustumGlyph(0xffd66f,.78,false);
+const liveFrustum=makeFrustumGlyph(0xffe08b,.84,true);
+const selectedFrustum=makeFrustumGlyph(0xf4efff,.92,true);
+const frustumAimCamera=new THREE.PerspectiveCamera(BASE_FOV,1.6,.05,80);
+
+const poseHandleGroup=new THREE.Group();
+const lookGuideGeometry=new THREE.BufferGeometry();
+const lookGuide=new THREE.Line(
+  lookGuideGeometry,
+  new THREE.LineDashedMaterial({
+    color:0xd7c4ff,
+    transparent:true,
+    opacity:.62,
+    dashSize:.10,
+    gapSize:.07,
+    depthWrite:false,
+    depthTest:true
+  })
+);
+const lookHandle=new THREE.Mesh(
+  new THREE.SphereGeometry(.105,18,12),
+  new THREE.MeshBasicMaterial({
+    color:0xf7f2ff,
+    transparent:true,
+    opacity:.96,
+    depthWrite:false,
+    depthTest:true
+  })
+);
+lookHandle.userData.cameraPoseHandle='look';
+lookHandle.renderOrder=8;
+scene.add(startFrustum,endFrustum,liveFrustum,selectedFrustum,poseHandleGroup,lookGuide,lookHandle);
 
 function setFrustumPose(group,position,target,roll=0){
   frustumAimCamera.position.copy(position);
@@ -389,19 +453,68 @@ function setFrustumPose(group,position,target,roll=0){
   group.position.copy(position);
   group.quaternion.copy(frustumAimCamera.quaternion);
 }
+function syncPosePointHandles(showAuthoring){
+  const s=shot();
+  while(poseHandleGroup.children.length<s.points.length){
+    const mesh=new THREE.Mesh(
+      new THREE.SphereGeometry(.075,16,10),
+      new THREE.MeshBasicMaterial({
+        color:0xb88cff,
+        transparent:true,
+        opacity:.82,
+        depthWrite:false,
+        depthTest:true
+      })
+    );
+    mesh.userData.cameraPoseHandle='position';
+    mesh.renderOrder=7;
+    poseHandleGroup.add(mesh);
+  }
+  while(poseHandleGroup.children.length>s.points.length){
+    const mesh=poseHandleGroup.children.pop();
+    mesh.geometry?.dispose?.();
+    mesh.material?.dispose?.();
+  }
+  poseHandleGroup.visible=showAuthoring;
+  poseHandleGroup.children.forEach((mesh,i)=>{
+    const p=s.points[i];
+    mesh.position.set(p[0],p[1],p[2]);
+    mesh.userData.pointIndex=i;
+    const active=i===selectedPoint;
+    mesh.scale.setScalar(active?1.55:1);
+    mesh.material.color.set(active?0xffffff:0xb88cff);
+    mesh.material.opacity=active?1:.74;
+  });
+}
 function syncFrustumVisuals(showAuthoring){
   const s=shot();
   const total=shotDuration(s);
   const startState=cameraStateAt(s,0);
   const endState=cameraStateAt(s,total);
+  const selected=poseStateForPoint(s,selectedPoint);
 
-  startFrustum.visible=showAuthoring;
-  endFrustum.visible=showAuthoring;
+  startFrustum.visible=showAuthoring && selectedPoint!==0;
+  endFrustum.visible=showAuthoring && selectedPoint!==s.points.length-1;
+  selectedFrustum.visible=showAuthoring;
   liveFrustum.visible=showAuthoring && pilotState.active;
+  lookHandle.visible=showAuthoring;
+  lookGuide.visible=showAuthoring;
+
+  syncPosePointHandles(showAuthoring);
 
   if(showAuthoring){
     setFrustumPose(startFrustum,startState.position,startState.target,startState.roll);
     setFrustumPose(endFrustum,endState.position,endState.target,endState.roll);
+    setFrustumPose(selectedFrustum,selected.position,selected.target,selected.roll);
+
+    const direction=selected.target.clone().sub(selected.position);
+    const targetDistance=Math.max(1.2,direction.length());
+    if(direction.lengthSq()<1e-6)direction.set(0,0,-1);
+    else direction.normalize();
+    const handleDistance=clamp(targetDistance*.34,1.05,1.75);
+    lookHandle.position.copy(selected.position).addScaledVector(direction,handleDistance);
+    lookGuide.geometry.setFromPoints([selected.position,lookHandle.position]);
+    lookGuide.computeLineDistances();
 
     if(pilotState.active){
       setFrustumPose(
@@ -431,7 +544,7 @@ function syncWorldPathVisual(force=false){
   const last=s.points[s.points.length-1]||[0,0,0];
   const liveCount=pilotState.active?pilotState.samples.length:0;
   const key=[
-    currentShotIndex,s.points.length,
+    currentShotIndex,selectedPoint,s.points.length,
     last.map(v=>(+v||0).toFixed(2)).join(','),
     liveCount,
     pilotState.active?camera.position.x.toFixed(2):'x',
@@ -535,6 +648,56 @@ let drag = null;
 let pointerDown = null;
 
 function shot(){ return shots[currentShotIndex]; }
+function ensurePoseKeys(s=shot()){
+  if(!Array.isArray(s.poseKeys))s.poseKeys=[];
+  while(s.poseKeys.length<s.points.length)s.poseKeys.push({lookAt:null,fov:null,roll:null});
+  if(s.poseKeys.length>s.points.length)s.poseKeys.length=s.points.length;
+  return s.poseKeys;
+}
+function pointTime(s,index){
+  if(index<=0)return 0;
+  let t=0;
+  const end=Math.min(index,s.segments.length);
+  for(let i=0;i<end;i++)t+=effectiveDuration(s.segments[i]);
+  return t;
+}
+function poseKeyForPoint(s,index){
+  const keys=ensurePoseKeys(s);
+  return keys[clamp(index,0,Math.max(0,s.points.length-1))];
+}
+function defaultTargetForPoint(s,index){
+  return targetFor(s,pointTime(s,index)).clone();
+}
+function poseStateForPoint(s,index){
+  const i=clamp(index,0,s.points.length-1);
+  const key=poseKeyForPoint(s,i);
+  const position=new THREE.Vector3(...s.points[i]);
+  const target=Array.isArray(key?.lookAt)
+    ? new THREE.Vector3(...key.lookAt)
+    : defaultTargetForPoint(s,i);
+  return {
+    position,
+    target,
+    fov:Number.isFinite(key?.fov)?key.fov:BASE_FOV,
+    roll:Number.isFinite(key?.roll)?key.roll:(s.roll||0),
+    pointIndex:i
+  };
+}
+function poseTargetOnSegment(s,segment,u,time){
+  const a=poseKeyForPoint(s,segment);
+  const b=poseKeyForPoint(s,Math.min(segment+1,s.points.length-1));
+  if(!Array.isArray(a?.lookAt) && !Array.isArray(b?.lookAt))return targetFor(s,time).clone();
+  const ta=Array.isArray(a?.lookAt)?new THREE.Vector3(...a.lookAt):defaultTargetForPoint(s,segment);
+  const tb=Array.isArray(b?.lookAt)?new THREE.Vector3(...b.lookAt):defaultTargetForPoint(s,Math.min(segment+1,s.points.length-1));
+  return ta.lerp(tb,fifthOrderStep01(clamp(u,0,1)));
+}
+function poseFovOnSegment(s,segment,u){
+  const a=poseKeyForPoint(s,segment);
+  const b=poseKeyForPoint(s,Math.min(segment+1,s.points.length-1));
+  const fa=Number.isFinite(a?.fov)?a.fov:BASE_FOV;
+  const fb=Number.isFinite(b?.fov)?b.fov:BASE_FOV;
+  return mix(fa,fb,fifthOrderStep01(clamp(u,0,1)));
+}
 function rawTargetPosition(id,s=shot()){
   const def=targetDefs[id] || targetDefs.room;
   const out=def.position.clone();
@@ -873,16 +1036,32 @@ function cameraStateAt(s,time){
   const total=shotDuration(s);
   if(s.stabilized && s.points.length>=2 && total>0){
     const normalized=clamp(time/total,0,1);
-    const u=silkyDistanceAtTime(s,normalized);
+    const pathU=silkyDistanceAtTime(s,normalized);
     const profile=silkyMotionFor(s);
-    const p=profile.curve.getPointAt(u);
-    const segment=Math.min(s.segments.length-1,Math.floor(u*Math.max(1,s.segments.length)));
-    return {position:p,target:targetFor(s,time).clone(),roll:(s.roll||0)+silkyBankAt(s,u),segment,u};
+    const p=profile.curve.getPointAt(pathU);
+    const scaled=pathU*Math.max(1,s.points.length-1);
+    const segment=Math.min(s.segments.length-1,Math.floor(scaled));
+    const local=clamp(scaled-segment,0,1);
+    return {
+      position:p,
+      target:poseTargetOnSegment(s,segment,local,time),
+      fov:poseFovOnSegment(s,segment,local),
+      roll:(s.roll||0)+silkyBankAt(s,pathU),
+      segment,
+      u:pathU
+    };
   }
   const hit=segmentAtTime(s,clamp(time,0,total));
   const u=smoothSegmentWarp(s,hit.i,hit.local);
   const p=posOnSegment(s,hit.i,u);
-  return {position:new THREE.Vector3(...p), target:targetFor(s,time).clone(), roll:s.roll||0, segment:hit.i, u};
+  return {
+    position:new THREE.Vector3(...p),
+    target:poseTargetOnSegment(s,hit.i,u,time),
+    fov:poseFovOnSegment(s,hit.i,u),
+    roll:s.roll||0,
+    segment:hit.i,
+    u
+  };
 }
 function samplePath(s=shot(),count=180){
   const total=shotDuration(s),arr=[];
@@ -1026,6 +1205,10 @@ function desiredCameraQuaternion(position,target,roll=0){
   return q.normalize();
 }
 function applyCameraState(state){
+  if(Number.isFinite(state?.fov) && Math.abs(camera.fov-state.fov)>.002){
+    camera.fov=state.fov;
+    camera.updateProjectionMatrix();
+  }
   if(playing && !navigationMode){
     const dt=Math.max(1/240,frameDt);
     const s=shot();
@@ -1093,7 +1276,8 @@ function updateCinematicOptics(s=shot(),time=playhead){
   bokehPass.enabled=active;
 
   const activity=active?subjectTransferActivity(s,time):0;
-  const desiredFov=BASE_FOV-activity*.8;
+  const authoredState=cameraStateAt(s,time);
+  const desiredFov=(Number.isFinite(authoredState.fov)?authoredState.fov:BASE_FOV)-activity*.8;
   if(Math.abs(camera.fov-desiredFov)>.002){
     camera.fov=desiredFov;
     camera.updateProjectionMatrix();
@@ -1351,7 +1535,7 @@ ui.addPoint.addEventListener('click',()=>{
 });
 ui.deletePoint.addEventListener('click',()=>{
   if(shot().points.length<=2)return;
-  stopPlayback();const s=shot();clearSilky(s);s.points.splice(selectedPoint,1);
+  stopPlayback();const s=shot();clearSilky(s);ensurePoseKeys(s);s.points.splice(selectedPoint,1);s.poseKeys.splice(selectedPoint,1);
   if(selectedPoint<s.segments.length)s.segments.splice(selectedPoint,1);else s.segments.pop();
   while(s.segments.length<s.points.length-1)s.segments.push({duration:1.8,speed:1,accelIn:5,brakeOut:5});
   relabelPoints(s);selectedPoint=clamp(selectedPoint,0,s.points.length-1);selectedSegment=clamp(Math.min(selectedPoint,s.segments.length-1),0,s.segments.length-1);refreshUI();setStatus('POINT DELETED');
@@ -2289,7 +2473,10 @@ function undoLastChainMove(){
   if(!history?.length)return false;
   stopPlayback();syncNavigationMode();
   const step=history.pop();
-  s.points.splice(Math.max(1,s.points.length-step.pointsAdded),step.pointsAdded);
+  const removeFrom=Math.max(1,s.points.length-step.pointsAdded);
+  ensurePoseKeys(s);
+  s.points.splice(removeFrom,step.pointsAdded);
+  s.poseKeys.splice(removeFrom,step.pointsAdded);
   s.segments.splice(Math.max(0,s.segments.length-step.segmentsAdded),step.segmentsAdded);
   if(s.segments.length && step.previousBrakeOut!==null){
     s.segments[s.segments.length-1].brakeOut=step.previousBrakeOut;
@@ -2605,7 +2792,7 @@ function bindMini(canvas,mode){
       p[1]=clamp(v[1],.35,3.7);
       if(ui.heightHint) ui.heightHint.textContent='height '+p[1].toFixed(2)+' m';
     }
-    refreshUI();setStatus(mode==='side'?'HEIGHT · '+p[1].toFixed(2)+'m':'EDIT POINT · '+shot().pointLabels[drag.index]);
+    syncWorldPathVisual(true);refreshUI();setStatus(mode==='side'?'HEIGHT · '+p[1].toFixed(2)+'m':'EDIT POINT · '+shot().pointLabels[drag.index]);
   });
   const end=e=>{if(!drag)return;drag=null;try{canvas.releasePointerCapture(e.pointerId)}catch{}setStatus('EDIT PATH')};
   canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
@@ -2613,6 +2800,110 @@ function bindMini(canvas,mode){
 bindMini(ui.top,'top');bindMini(ui.side,'side');
 
 const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
+let poseDrag=null;
+const poseDragPlane=new THREE.Plane();
+const poseDragHit=new THREE.Vector3();
+
+function setPointerRay(clientX,clientY){
+  const r=renderer.domElement.getBoundingClientRect();
+  pointer.x=((clientX-r.left)/r.width)*2-1;
+  pointer.y=-((clientY-r.top)/r.height)*2+1;
+  raycaster.setFromCamera(pointer,camera);
+}
+function hitCameraPoseHandle(clientX,clientY){
+  setPointerRay(clientX,clientY);
+  const objects=[...poseHandleGroup.children,lookHandle];
+  const hits=raycaster.intersectObjects(objects,false);
+  return hits[0]||null;
+}
+function beginPoseDrag(e,hit){
+  const kind=hit.object.userData.cameraPoseHandle;
+  const index=kind==='position'?hit.object.userData.pointIndex:selectedPoint;
+  if(index===undefined || index===null)return false;
+  stopPlayback();
+  selectedPoint=clamp(index,0,shot().points.length-1);
+  selectedSegment=clamp(Math.min(selectedPoint,shot().segments.length-1),0,shot().segments.length-1);
+  const pose=poseStateForPoint(shot(),selectedPoint);
+  const normal=new THREE.Vector3();
+  camera.getWorldDirection(normal);
+  const anchor=kind==='look'?lookHandle.position:pose.position;
+  poseDragPlane.setFromNormalAndCoplanarPoint(normal,anchor);
+  setPointerRay(e.clientX,e.clientY);
+  raycaster.ray.intersectPlane(poseDragPlane,poseDragHit);
+  poseDrag={
+    pointerId:e.pointerId,
+    kind,
+    index:selectedPoint,
+    startHit:poseDragHit.clone(),
+    startPosition:pose.position.clone(),
+    startTarget:pose.target.clone(),
+    targetDistance:Math.max(1.2,pose.position.distanceTo(pose.target))
+  };
+  try{renderer.domElement.setPointerCapture(e.pointerId)}catch{}
+  syncWorldPathVisual(true);
+  refreshUI();
+  setStatus(kind==='look'?'CAMERA POSE · DRAG VIEW':'CAMERA POSE · DRAG POSITION');
+  return true;
+}
+function updatePoseDrag(e){
+  if(!poseDrag || e.pointerId!==poseDrag.pointerId)return;
+  e.preventDefault();
+  setPointerRay(e.clientX,e.clientY);
+  if(!raycaster.ray.intersectPlane(poseDragPlane,poseDragHit))return;
+  const s=shot();
+  clearSilky(s);
+  const key=poseKeyForPoint(s,poseDrag.index);
+  if(poseDrag.kind==='position'){
+    const delta=poseDragHit.clone().sub(poseDrag.startHit);
+    const p=poseDrag.startPosition.clone().add(delta);
+    p.x=clamp(p.x,-5.2,5.2);
+    p.y=clamp(p.y,.35,3.7);
+    p.z=clamp(p.z,-5.2,7.8);
+    s.points[poseDrag.index]=p.toArray();
+    setStatus('CAMERA POSE · POSITION');
+  }else{
+    const position=new THREE.Vector3(...s.points[poseDrag.index]);
+    const direction=poseDragHit.clone().sub(position);
+    if(direction.lengthSq()>.01){
+      direction.normalize();
+      key.lookAt=position.clone().addScaledVector(direction,poseDrag.targetDistance).toArray();
+      setStatus('CAMERA POSE · VIEW DIRECTION');
+    }
+  }
+  pathVisualKey='';
+  syncWorldPathVisual(true);
+}
+function endPoseDrag(e){
+  if(!poseDrag || (e?.pointerId!==undefined && e.pointerId!==poseDrag.pointerId))return;
+  try{renderer.domElement.releasePointerCapture(poseDrag.pointerId)}catch{}
+  const kind=poseDrag.kind;
+  poseDrag=null;
+  relabelPoints(shot());
+  refreshUI();
+  syncWorldPathVisual(true);
+  setStatus(kind==='look'?'VIEW KEY SAVED':'CAMERA POSITION SAVED');
+}
+renderer.domElement.addEventListener('pointermove',updatePoseDrag,{capture:true});
+window.addEventListener('pointerup',endPoseDrag);
+window.addEventListener('pointercancel',endPoseDrag);
+
+renderer.domElement.addEventListener('wheel',e=>{
+  if(playing || navigationMode || pilotState.active || poseDrag)return;
+  const hit=hitCameraPoseHandle(e.clientX,e.clientY);
+  if(!hit || (hit.object.userData.cameraPoseHandle!=='position' && hit.object!==lookHandle))return;
+  e.preventDefault();
+  const s=shot();
+  const index=hit.object.userData.cameraPoseHandle==='position'?hit.object.userData.pointIndex:selectedPoint;
+  selectedPoint=clamp(index,0,s.points.length-1);
+  selectedSegment=clamp(Math.min(selectedPoint,s.segments.length-1),0,s.segments.length-1);
+  const key=poseKeyForPoint(s,selectedPoint);
+  const current=Number.isFinite(key.fov)?key.fov:BASE_FOV;
+  key.fov=clamp(current+Math.sign(e.deltaY)*1.5,24,82);
+  syncWorldPathVisual(true);
+  refreshUI();
+  setStatus('LENS · '+key.fov.toFixed(0)+'°');
+},{passive:false});
+
 function selectTargetAt(clientX,clientY,live=false){
   const r=renderer.domElement.getBoundingClientRect();
   pointer.x=((clientX-r.left)/r.width)*2-1;
@@ -2641,12 +2932,21 @@ function selectTargetAt(clientX,clientY,live=false){
   return false;
 }
 renderer.domElement.addEventListener('pointerdown',e=>{
+  if(e.button!==0)return;
   if(playing){
-    if(e.button!==0)return;
     e.preventDefault();
     e.stopPropagation();
     selectTargetAt(e.clientX,e.clientY,true);
     return;
+  }
+  if(!navigationMode){
+    const poseHit=hitCameraPoseHandle(e.clientX,e.clientY);
+    if(poseHit){
+      e.preventDefault();
+      e.stopPropagation();
+      beginPoseDrag(e,poseHit);
+      return;
+    }
   }
   beginPilotGesture(e);
 },{capture:true});
