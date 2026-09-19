@@ -1,0 +1,46 @@
+name: CameraControl3D smoke test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check JavaScript syntax
+        run: |
+          cp app.js /tmp/app.mjs
+          node --check /tmp/app.mjs
+
+      - name: Verify static entrypoints
+        run: |
+          test -f index.html
+          test -f styles.css
+          test -f app.js
+          grep -q 'styles.css' index.html
+          grep -q 'app.js' index.html
+
+      - name: Serve and request the app
+        run: |
+          python3 -m http.server 4173 >/tmp/camera-control-http.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:4173/ >/tmp/index.html; then
+              break
+            fi
+            sleep 0.25
+          done
+          test -s /tmp/index.html
+          curl --fail --silent http://127.0.0.1:4173/app.js >/tmp/app.js
+          curl --fail --silent http://127.0.0.1:4173/styles.css >/tmp/styles.css
+          test -s /tmp/app.js
+          test -s /tmp/styles.css
