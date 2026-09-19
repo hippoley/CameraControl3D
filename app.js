@@ -71,7 +71,9 @@ const ui = {
   shotStrip: $('shotStrip'),
   timelineMeta: $('timelineMeta'),
   focusPreviewName: $('focusPreviewName'),
-  quickReset: $('quickReset')
+  quickReset: $('quickReset'),
+  aimBias: $('aimBias'),
+  aimBiasVal: $('aimBiasVal')
 };
 
 function setAdvancedOpen(open){
@@ -326,7 +328,51 @@ authoredPathLine.renderOrder=2;
 authoredPathDots.renderOrder=2;
 livePathLine.renderOrder=3;
 livePathDots.renderOrder=3;
-scene.add(authoredPathLine,authoredPathDots,livePathLine,livePathDots);
+const lookPathGeometry=new THREE.BufferGeometry();
+const lookPathLine=new THREE.Line(
+  lookPathGeometry,
+  new THREE.LineDashedMaterial({
+    color:0xffd66f,
+    transparent:true,
+    opacity:.48,
+    dashSize:.10,
+    gapSize:.08,
+    depthTest:true,
+    depthWrite:false
+  })
+);
+lookPathLine.renderOrder=2;
+
+const gazeIntentGeometry=new THREE.BufferGeometry();
+const gazeIntentLines=new THREE.LineSegments(
+  gazeIntentGeometry,
+  new THREE.LineBasicMaterial({
+    color:0xffd66f,
+    transparent:true,
+    opacity:.36,
+    depthTest:true,
+    depthWrite:false
+  })
+);
+gazeIntentLines.renderOrder=3;
+
+const motionIntentGeometry=new THREE.BufferGeometry();
+const motionIntentLines=new THREE.LineSegments(
+  motionIntentGeometry,
+  new THREE.LineBasicMaterial({
+    color:0xb88cff,
+    transparent:true,
+    opacity:.38,
+    depthTest:true,
+    depthWrite:false
+  })
+);
+motionIntentLines.renderOrder=3;
+
+scene.add(
+  authoredPathLine,authoredPathDots,livePathLine,livePathDots,
+  lookPathLine,gazeIntentLines,motionIntentLines
+);
 
 function makeFrustumGlyph(color,scale=1,selected=false){
   const group=new THREE.Group();
@@ -549,12 +595,56 @@ function syncPosePointHandles(showAuthoring){
     mesh.material.opacity=active?1:.74;
   });
 }
+function syncCameraIntentVisuals(showAuthoring){
+  lookPathLine.visible=showAuthoring;
+  gazeIntentLines.visible=showAuthoring;
+  motionIntentLines.visible=showAuthoring;
+  if(!showAuthoring)return;
+
+  const s=shot();
+  const total=shotDuration(s);
+  const sampleCount=42;
+  const lookPoints=[];
+  for(let i=0;i<=sampleCount;i++){
+    const st=cameraStateAt(s,total*i/sampleCount);
+    lookPoints.push((st.gazeTarget||st.target).clone());
+  }
+  const oldLook=lookPathLine.geometry;
+  const nextLook=new THREE.BufferGeometry().setFromPoints(lookPoints);
+  lookPathLine.geometry=nextLook;
+  oldLook?.dispose?.();
+  lookPathLine.computeLineDistances();
+
+  const gazeVerts=[],motionVerts=[];
+  const fractions=[.20,.40,.60,.80];
+  fractions.forEach(fr=>{
+    const st=cameraStateAt(s,total*fr);
+    const p=st.position;
+    const gaze=st.gazeTarget||st.target;
+    const gazeDir=gaze.clone().sub(p);
+    const gazeLen=Math.min(1.35,Math.max(.55,gazeDir.length()*.22));
+    if(gazeDir.lengthSq()>.00001){
+      gazeDir.normalize();
+      gazeVerts.push(...p.toArray(),...p.clone().addScaledVector(gazeDir,gazeLen).toArray());
+    }
+    const mdir=st.motionDir?.clone()||new THREE.Vector3(0,0,-1);
+    if(mdir.lengthSq()>.00001){
+      mdir.normalize();
+      motionVerts.push(...p.toArray(),...p.clone().addScaledVector(mdir,.82).toArray());
+    }
+  });
+  gazeIntentGeometry.setAttribute('position',new THREE.Float32BufferAttribute(gazeVerts,3));
+  gazeIntentGeometry.computeBoundingSphere();
+  motionIntentGeometry.setAttribute('position',new THREE.Float32BufferAttribute(motionVerts,3));
+  motionIntentGeometry.computeBoundingSphere();
+}
 function syncFrustumVisuals(showAuthoring){
   const s=shot();
   const total=shotDuration(s);
   const startState=cameraStateAt(s,0);
   const endState=cameraStateAt(s,total);
-  const selected=poseStateForPoint(s,selectedPoint);
+  const selectedPose=poseStateForPoint(s,selectedPoint);
+  const selectedState=cameraStateAt(s,pointTime(s,selectedPoint));
 
   startFrustum.visible=showAuthoring && selectedPoint!==0;
   endFrustum.visible=showAuthoring && selectedPoint!==s.points.length-1;
@@ -567,30 +657,36 @@ function syncFrustumVisuals(showAuthoring){
   ghostFrustums.forEach(g=>g.visible=showAuthoring);
 
   syncPosePointHandles(showAuthoring);
+  syncCameraIntentVisuals(showAuthoring);
 
   if(showAuthoring){
     setFrustumPose(startFrustum,startState.position,startState.target,startState.roll,startState.fov);
     setFrustumPose(endFrustum,endState.position,endState.target,endState.roll,endState.fov);
-    setFrustumPose(selectedFrustum,selected.position,selected.target,selected.roll,selected.fov);
+    setFrustumPose(selectedFrustum,selectedState.position,selectedState.target,selectedState.roll,selectedState.fov);
 
     const fractions=[.20,.40,.60,.80];
     ghostFrustums.forEach((g,i)=>{
       const st=cameraStateAt(s,total*fractions[i]);
       setFrustumPose(g,st.position,st.target,st.roll,st.fov);
+      const emphasis=.28+.54*(st.aimBias??DEFAULT_AIM_BIAS);
+      g.traverse(o=>{
+        if(o.material && o!==g.userData?.lines)o.material.opacity=Math.min(.32,emphasis*.18);
+      });
     });
 
-    const direction=selected.target.clone().sub(selected.position);
-    const targetDistance=Math.max(1.2,direction.length());
-    if(direction.lengthSq()<1e-6)direction.set(0,0,-1);
-    else direction.normalize();
+    // The white handle edits desired gaze. The frustum itself shows the final
+    // preference-blended camera direction, so the difference remains visible.
+    const gazeDirection=selectedPose.target.clone().sub(selectedPose.position);
+    const targetDistance=Math.max(1.2,gazeDirection.length());
+    if(gazeDirection.lengthSq()<1e-6)gazeDirection.set(0,0,-1);
+    else gazeDirection.normalize();
 
     const handleDistance=clamp(targetDistance*.34,1.05,1.75);
-    lookHandle.position.copy(selected.position).addScaledVector(direction,handleDistance);
-    lookGuide.geometry.setFromPoints([selected.position,lookHandle.position]);
+    lookHandle.position.copy(selectedPose.position).addScaledVector(gazeDirection,handleDistance);
+    lookGuide.geometry.setFromPoints([selectedPose.position,lookHandle.position]);
     lookGuide.computeLineDistances();
 
-    // Lens/FOV handle sits on the right edge of the selected frustum's image plane.
-    const fs=fovScaleFor(selected.fov);
+    const fs=fovScaleFor(selectedState.fov);
     const localFovEdge=new THREE.Vector3(
       selectedFrustum.userData.frustumWidth*fs,
       0,
@@ -598,10 +694,9 @@ function syncFrustumVisuals(showAuthoring){
     );
     fovHandle.position.copy(localFovEdge)
       .applyQuaternion(selectedFrustum.quaternion)
-      .add(selected.position);
+      .add(selectedState.position);
 
-    // Roll ring is oriented with the selected camera, around its optical axis.
-    rollHandleGroup.position.copy(selected.position);
+    rollHandleGroup.position.copy(selectedState.position);
     rollHandleGroup.quaternion.copy(selectedFrustum.quaternion);
     const ringScale=clamp(.84+fs*.12,.9,1.18);
     rollHandleGroup.scale.setScalar(ringScale);
@@ -640,6 +735,7 @@ function syncWorldPathVisual(force=false){
     Array.isArray(poseKey.lookAt)?poseKey.lookAt.map(v=>(+v||0).toFixed(2)).join(','):'auto',
     Number.isFinite(poseKey.fov)?poseKey.fov.toFixed(1):'auto-fov',
     Number.isFinite(poseKey.roll)?poseKey.roll.toFixed(3):'auto-roll',
+    Number.isFinite(poseKey.aimBias)?poseKey.aimBias.toFixed(2):'auto-aim',
     last.map(v=>(+v||0).toFixed(2)).join(','),
     liveCount,
     pilotState.active?camera.position.x.toFixed(2):'x',
@@ -745,7 +841,7 @@ let pointerDown = null;
 function shot(){ return shots[currentShotIndex]; }
 function ensurePoseKeys(s=shot()){
   if(!Array.isArray(s.poseKeys))s.poseKeys=[];
-  while(s.poseKeys.length<s.points.length)s.poseKeys.push({lookAt:null,fov:null,roll:null});
+  while(s.poseKeys.length<s.points.length)s.poseKeys.push({lookAt:null,fov:null,roll:null,aimBias:null});
   if(s.poseKeys.length>s.points.length)s.poseKeys.length=s.points.length;
   return s.poseKeys;
 }
@@ -775,6 +871,7 @@ function poseStateForPoint(s,index){
     target,
     fov:Number.isFinite(key?.fov)?key.fov:BASE_FOV,
     roll:Number.isFinite(key?.roll)?key.roll:(s.roll||0),
+    aimBias:Number.isFinite(key?.aimBias)?key.aimBias:DEFAULT_AIM_BIAS,
     pointIndex:i
   };
 }
@@ -793,6 +890,7 @@ function poseFovOnSegment(s,segment,u){
   const fb=Number.isFinite(b?.fov)?b.fov:BASE_FOV;
   return mix(fa,fb,fifthOrderStep01(clamp(u,0,1)));
 }
+const DEFAULT_AIM_BIAS=.82;
 function poseRollOnSegment(s,segment,u){
   const a=poseKeyForPoint(s,segment);
   const b=poseKeyForPoint(s,Math.min(segment+1,s.points.length-1));
@@ -802,6 +900,40 @@ function poseRollOnSegment(s,segment,u){
   while(delta>Math.PI)delta-=Math.PI*2;
   while(delta<-Math.PI)delta+=Math.PI*2;
   return ra+delta*fifthOrderStep01(clamp(u,0,1));
+}
+function poseAimBiasOnSegment(s,segment,u){
+  const a=poseKeyForPoint(s,segment);
+  const b=poseKeyForPoint(s,Math.min(segment+1,s.points.length-1));
+  const aa=Number.isFinite(a?.aimBias)?a.aimBias:DEFAULT_AIM_BIAS;
+  const bb=Number.isFinite(b?.aimBias)?b.aimBias:DEFAULT_AIM_BIAS;
+  return mix(aa,bb,fifthOrderStep01(clamp(u,0,1)));
+}
+function motionDirectionForState(s,segment,u,pathU=null){
+  if(s.stabilized && Number.isFinite(pathU)){
+    const tangent=silkyMotionFor(s).curve.getTangentAt(clamp(pathU,0,1));
+    if(tangent.lengthSq()>.00001)return tangent.normalize();
+  }
+  const eps=.015;
+  const ua=clamp(u-eps,0,1),ub=clamp(u+eps,0,1);
+  const a=new THREE.Vector3(...posOnSegment(s,segment,ua));
+  const b=new THREE.Vector3(...posOnSegment(s,segment,ub));
+  const tangent=b.sub(a);
+  if(tangent.lengthSq()>.00001)return tangent.normalize();
+
+  const p0=s.points[Math.max(0,segment)];
+  const p1=s.points[Math.min(s.points.length-1,segment+1)];
+  return new THREE.Vector3(p1[0]-p0[0],p1[1]-p0[1],p1[2]-p0[2]).normalize();
+}
+function blendedCameraTarget(position,gazeTarget,motionDir,aimBias){
+  const gazeDir=gazeTarget.clone().sub(position);
+  const distance=Math.max(1.5,gazeDir.length());
+  if(gazeDir.lengthSq()<.00001)gazeDir.copy(motionDir);
+  else gazeDir.normalize();
+  const finalDir=motionDir.clone().multiplyScalar(1-aimBias)
+    .addScaledVector(gazeDir,aimBias);
+  if(finalDir.lengthSq()<.00001)finalDir.copy(gazeDir);
+  else finalDir.normalize();
+  return position.clone().addScaledVector(finalDir,distance);
 }
 function rawTargetPosition(id,s=shot()){
   const def=targetDefs[id] || targetDefs.room;
@@ -1147,9 +1279,15 @@ function cameraStateAt(s,time){
     const scaled=pathU*Math.max(1,s.points.length-1);
     const segment=Math.min(s.segments.length-1,Math.floor(scaled));
     const local=clamp(scaled-segment,0,1);
+    const gazeTarget=poseTargetOnSegment(s,segment,local,time);
+    const motionDir=motionDirectionForState(s,segment,local,pathU);
+    const aimBias=poseAimBiasOnSegment(s,segment,local);
     return {
       position:p,
-      target:poseTargetOnSegment(s,segment,local,time),
+      gazeTarget,
+      motionDir,
+      aimBias,
+      target:blendedCameraTarget(p,gazeTarget,motionDir,aimBias),
       fov:poseFovOnSegment(s,segment,local),
       roll:poseRollOnSegment(s,segment,local)+silkyBankAt(s,pathU),
       segment,
@@ -1158,10 +1296,16 @@ function cameraStateAt(s,time){
   }
   const hit=segmentAtTime(s,clamp(time,0,total));
   const u=smoothSegmentWarp(s,hit.i,hit.local);
-  const p=posOnSegment(s,hit.i,u);
+  const p=new THREE.Vector3(...posOnSegment(s,hit.i,u));
+  const gazeTarget=poseTargetOnSegment(s,hit.i,u,time);
+  const motionDir=motionDirectionForState(s,hit.i,u,null);
+  const aimBias=poseAimBiasOnSegment(s,hit.i,u);
   return {
-    position:new THREE.Vector3(...p),
-    target:poseTargetOnSegment(s,hit.i,u,time),
+    position:p,
+    gazeTarget,
+    motionDir,
+    aimBias,
+    target:blendedCameraTarget(p,gazeTarget,motionDir,aimBias),
     fov:poseFovOnSegment(s,hit.i,u),
     roll:poseRollOnSegment(s,hit.i,u),
     segment:hit.i,
@@ -1565,6 +1709,7 @@ function refreshUI(){
   renderShots();renderTargets();renderPoints();renderSegments();renderTiming();refreshTimeline();
   renderShotStrip();
   syncFocusButtons();
+  syncAimBiasControl();
   syncStabilizeButton();
   syncMainPlayButton();
 }
@@ -1767,6 +1912,26 @@ quickPlay?.addEventListener('click',()=>{
 });
 quickStart?.addEventListener('click',()=>ui.origin.click());
 ui.quickReset?.addEventListener('click',()=>ui.reset.click());
+
+function syncAimBiasControl(){
+  if(!ui.aimBias)return;
+  const key=poseKeyForPoint(shot(),selectedPoint);
+  const value=Number.isFinite(key?.aimBias)?key.aimBias:DEFAULT_AIM_BIAS;
+  ui.aimBias.value=String(value);
+  if(ui.aimBiasVal)ui.aimBiasVal.textContent=Math.round(value*100)+'%';
+  setRangePos(ui.aimBias,0,1);
+}
+ui.aimBias?.addEventListener('input',e=>{
+  const value=clamp(+e.target.value,0,1);
+  const key=poseKeyForPoint(shot(),selectedPoint);
+  key.aimBias=value;
+  if(ui.aimBiasVal)ui.aimBiasVal.textContent=Math.round(value*100)+'%';
+  setRangePos(ui.aimBias,0,1);
+  pathVisualKey='';
+  syncWorldPathVisual(true);
+  applyCameraState(cameraStateAt(shot(),pointTime(shot(),selectedPoint)));
+  setStatus('CAMERA PREFERENCE · '+Math.round(value*100)+'% SUBJECT');
+});
 
 document.querySelectorAll('[data-focus-target]').forEach(btn=>{
   btn.addEventListener('click',()=>{
