@@ -1818,14 +1818,23 @@ function updatePilot(dt,nowMs){
   let next;
   if(pilotState.intent==='crane'){
     const metersPerPixel=3.15/Math.max(360,g.h);
+    const axisMeters=-(pilotState.y-pilotState.anchorY)*metersPerPixel;
+    const depthEase=smoothstep01(clamp(Math.abs(axisMeters)/1.8,0,1));
+    const depthMeters=Math.min(.58,Math.abs(axisMeters)*.20)*depthEase;
     next=pilotState.startPosition.clone()
-      .addScaledVector(worldUp,-(pilotState.y-pilotState.anchorY)*metersPerPixel);
+      .addScaledVector(worldUp,axisMeters)
+      .addScaledVector(forward,depthMeters);
   }else if(pilotState.intent==='truck'){
     const metersPerPixel=4.6/Math.max(520,g.w);
+    const axisMeters=(pilotState.x-pilotState.anchorX)*metersPerPixel;
+    const depthEase=smoothstep01(clamp(Math.abs(axisMeters)/2.2,0,1));
+    const depthMeters=Math.min(.72,Math.abs(axisMeters)*.18)*depthEase;
     next=pilotState.startPosition.clone()
-      .addScaledVector(right,(pilotState.x-pilotState.anchorX)*metersPerPixel);
+      .addScaledVector(right,axisMeters)
+      .addScaledVector(forward,depthMeters);
   }else{
-    // Free stroke still behaves as a depth-capable camera drive.
+    // Free stroke remains depth-capable. Near an axis, forward motion is reduced
+    // until the gesture locks into a crane / truck with explicit parallax.
     const axisIntent=Math.max(verticalIntent,horizontalIntent);
     const freeIntent=1-axisIntent;
     const direction=forward.clone().multiplyScalar(.72*freeIntent)
