@@ -1,0 +1,115 @@
+name: CameraControl3D live preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/preview.yml'
+      - '.preview-trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  live-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout full project
+        uses: actions/checkout@v4
+
+      - name: Verify project before serving
+        run: |
+          set -euo pipefail
+          test -f index.html
+          test -f styles.css
+          test -f app.js
+          cp app.js /tmp/app.mjs
+          node --check /tmp/app.mjs
+          grep -q 'styles.css' index.html
+          grep -q 'app.js' index.html
+
+      - name: Start CameraControl3D
+        run: |
+          set -euo pipefail
+          python3 -m http.server 4173 --bind 127.0.0.1 > /tmp/camera-http.log 2>&1 &
+          echo $! > /tmp/camera-http.pid
+
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ > /tmp/camera-index.html; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          test -s /tmp/camera-index.html
+          curl --fail --silent http://127.0.0.1:4173/app.js > /tmp/camera-app.js
+          curl --fail --silent http://127.0.0.1:4173/styles.css > /tmp/camera-styles.css
+          echo "Local app is healthy on port 4173."
+
+      - name: Install Cloudflare tunnel
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64             -o /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+          /tmp/cloudflared --version
+
+      - name: Expose live preview
+        id: tunnel
+        run: |
+          set -euo pipefail
+          /tmp/cloudflared tunnel             --url http://127.0.0.1:4173             --no-autoupdate             > /tmp/cloudflared.log 2>&1 &
+          echo $! > /tmp/cloudflared.pid
+
+          PREVIEW_URL=""
+          for i in {1..60}; do
+            PREVIEW_URL="$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n 1 || true)"
+            if [ -n "$PREVIEW_URL" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "Cloudflare tunnel did not return a public URL."
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
+          echo "preview_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$PREVIEW_URL" > preview-url.txt
+
+          {
+            echo "## 🎥 CameraControl3D is live"
+            echo
+            echo "**$PREVIEW_URL**"
+            echo
+            echo "This is the full repository served by this GitHub Actions run."
+            echo "The preview stays alive while the workflow is running (up to 3 hours)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "CAMERACONTROL3D_PREVIEW=$PREVIEW_URL"
+
+      - name: Upload preview URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: CameraControl3D-preview-url
+          path: preview-url.txt
+          retention-days: 1
+
+      - name: Keep preview alive
+        run: |
+          set -euo pipefail
+          echo "Preview: ${{ steps.tunnel.outputs.preview_url }}"
+          echo "Keeping CameraControl3D available for up to 3 hours."
+          for i in {1..180}; do
+            curl --fail --silent http://127.0.0.1:4173/ > /dev/null
+            if ! kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
+              echo "Tunnel stopped unexpectedly."
+              cat /tmp/cloudflared.log
+              exit 1
+            fi
+            sleep 60
+          done
