@@ -133,7 +133,7 @@ function syncNavigationMode(){
   ui.stage?.classList.toggle('navigate',navigationMode);
   if(ui.homeView){
     ui.homeView.classList.toggle('active',navigationMode);
-    ui.homeView.textContent = navigationMode ? 'Done' : 'Navigate';
+    ui.homeView.textContent = navigationMode ? 'Done' : 'Explore';
   }
 }
 
