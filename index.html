@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Camera Control</title>
+<title>CameraControl3D</title>
 <link rel="stylesheet" href="./styles.css">
 <script type="importmap">
 {
@@ -17,7 +17,11 @@
 <body>
 <main class="app">
   <header class="topbar">
-    <strong class="brand"><span class="brand-mark" aria-hidden="true">◇</span><span>CameraControl3D</span></strong>
+    <div class="brand-cluster">
+      <strong class="brand"><span class="brand-mark" aria-hidden="true">◇</span><span>CameraControl<span class="brand-accent">3D</span></span></strong>
+      <span class="brand-divider"></span>
+      <span class="brand-tagline">Draw the move. Point at the subject. Get the shot.</span>
+    </div>
 
     <div class="top-center">
       <select id="shots" aria-label="Shot"></select>
@@ -36,21 +40,23 @@
       <canvas id="scene"></canvas>
       <canvas id="frameOverlay"></canvas>
 
+      <div class="viewport-authoring">
+        <div class="author-badge">✎ <b>AUTHOR · DRAW 3D LINE</b></div>
+        <div class="author-hint">Drag through the scene. The line lives in 3D.</div>
+      </div>
+
       <div class="motion-ui" id="motionUI">
         <div class="next-frame" id="nextFrame">
           <span>DRAG</span>
           <i class="rotate-handle" id="frameRotate" title="Rotate"></i>
           <i class="resize-handle" id="frameResize" title="Resize / zoom"></i>
         </div>
-
         <button class="ribbon-handle" id="ribbonHandle" type="button" title="Bend path"></button>
-
         <div class="ghost-frame ghost-1" id="ghost1"></div>
         <div class="ghost-frame ghost-2" id="ghost2"></div>
         <div class="ghost-frame ghost-3" id="ghost3"></div>
-
         <div class="motion-actions">
-          <button id="motionReset" type="button" title="Reset">↺</button>
+          <button id="motionReset" type="button" title="Reset current gesture">↺</button>
           <button id="motionApply" class="motion-apply" type="button">Apply</button>
         </div>
       </div>
@@ -59,108 +65,162 @@
         <span id="status">DRAW A 3D LINE</span>
       </div>
 
+      <div class="viewport-footer">
+        <span>3D SPACE</span>
+        <span>PATH + SUBJECT + MOTION</span>
+      </div>
+
       <div class="loading" id="loading">Building 3D room…</div>
       <div class="error" id="error"></div>
     </div>
 
-    <div class="transport">
-      <button id="origin" type="button" title="Back to shot start">⌂</button>
-      <button class="play-main" id="play" type="button">▶ Play</button>
-      <div class="time-wrap">
-        <span id="readout">0.00</span>
-        <input id="timeline" type="range" min="0" max="1" step=".01" value="0">
-        <span id="totalReadout">0.00</span>
+    <section class="timeline-panel" aria-label="Camera path timeline">
+      <div class="timeline-head">
+        <div>
+          <b>Camera Path Timeline</b>
+          <span id="timelineMeta">4 shots</span>
+        </div>
+        <span class="timeline-mode">Cinematic motion</span>
       </div>
-      <button id="stabilizePath" class="stabilize-btn" type="button" title="轻微平滑当前轨迹，减少抖动和速度卡顿">一键防抖防止卡顿</button>
-    </div>
+
+      <div class="shot-strip" id="shotStrip"></div>
+
+      <div class="timeline-transport">
+        <button class="timeline-play" id="quickPlay" type="button">▶ Preview shot</button>
+        <span id="readout">0.00 s</span>
+        <input id="timeline" type="range" min="0" max="1" step=".01" value="0" aria-label="Shot playhead">
+        <span id="totalReadout">0.00 s</span>
+        <button id="origin" type="button" title="Back to shot start">Start</button>
+      </div>
+    </section>
 
     <div class="mini-views">
       <div class="mini-view">
         <canvas id="topView"></canvas>
-        <div class="mini-caption"><b>TOP</b></div>
+        <div class="mini-caption"><b>Top View</b><span>X–Z</span></div>
       </div>
       <div class="mini-view">
         <canvas id="sideView"></canvas>
-        <div class="mini-caption"><b>SIDE</b><span id="heightHint">auto</span></div>
+        <div class="mini-caption"><b>Side View</b><span id="heightHint">X–Y · auto</span></div>
       </div>
     </div>
   </section>
 
-  <aside class="inspector" id="advancedDrawer" aria-hidden="true">
-    <div class="drawer-head">
-      <b>Advanced</b>
-      <button id="advancedClose" type="button">×</button>
+  <aside class="inspector" id="advancedDrawer" aria-hidden="false">
+    <div class="sidebar-section playback-section">
+      <div class="sidebar-title"><span>▣</span><b>Playback & Motion</b></div>
+      <button class="hero-control" id="play" type="button"><span class="hero-icon">▶</span><span><b>Play</b><small>Preview current shot</small></span><kbd>Space</kbd></button>
+      <button class="sidebar-control" id="stabilizePath" type="button" title="Smooth current camera motion">
+        <span class="control-icon">≋</span>
+        <span><b>Motion Smoothing</b><small>5th-order flow</small></span>
+        <kbd>S</kbd>
+      </button>
+      <button class="sidebar-control" id="quickReset" type="button">
+        <span class="control-icon">↺</span>
+        <span><b>Reset Path</b><small>Restore demo shot</small></span>
+        <kbd>R</kbd>
+      </button>
     </div>
 
-    <label class="field">
-      <span>Look at</span>
-      <select id="targets"></select>
-    </label>
-    <div class="target-meta" id="targetMeta"></div>
+    <div class="sidebar-section focus-section">
+      <div class="sidebar-title"><span>⌾</span><b>Focus on Subject</b></div>
+      <div class="focus-grid">
+        <button type="button" data-focus-target="sofa">▱ <span>Sofa</span></button>
+        <button type="button" data-focus-target="window">▦ <span>Window</span></button>
+        <button type="button" data-focus-target="cabinet">▣ <span>TV</span></button>
+        <button type="button" data-focus-target="plant">♧ <span>Plant</span></button>
+      </div>
+      <div class="focus-preview">
+        <div class="focus-preview-art"><span>SUBJECT</span><b id="focusPreviewName">Room</b></div>
+        <p>Keep attention separate from motion. Change subject while the camera keeps moving.</p>
+      </div>
+    </div>
 
-    <details class="axes-detail">
-      <summary>Six-axis</summary>
-      <div class="axes-body">
-        <div class="control-pair">
-          <label class="quick-control"><span>Horizontal <b id="qHorizontalVal">0.0</b></span><input id="qHorizontal" type="range" min="-10" max="10" step=".1" value="0"></label>
-          <label class="quick-control"><span>Pan <b id="qPanVal">0.0</b></span><input id="qPan" type="range" min="-10" max="10" step=".1" value="0"></label>
+    <details class="advanced-shell">
+      <summary><span>⚙</span><b>Advanced</b><span class="advanced-chevron">⌄</span></summary>
+      <div class="advanced-content">
+        <div class="drawer-head">
+          <b>Camera controls</b>
+          <button id="advancedClose" type="button">×</button>
         </div>
-        <div class="control-pair">
-          <label class="quick-control"><span>Vertical <b id="qVerticalVal">0.0</b></span><input id="qVertical" type="range" min="-10" max="10" step=".1" value="0"></label>
-          <label class="quick-control"><span>Tilt <b id="qTiltVal">0.0</b></span><input id="qTilt" type="range" min="-10" max="10" step=".1" value="0"></label>
+
+        <label class="field">
+          <span>Look at</span>
+          <select id="targets"></select>
+        </label>
+        <div class="target-meta" id="targetMeta"></div>
+
+        <details class="axes-detail">
+          <summary>Six-axis</summary>
+          <div class="axes-body">
+            <div class="control-pair">
+              <label class="quick-control"><span>Horizontal <b id="qHorizontalVal">0.0</b></span><input id="qHorizontal" type="range" min="-10" max="10" step=".1" value="0"></label>
+              <label class="quick-control"><span>Pan <b id="qPanVal">0.0</b></span><input id="qPan" type="range" min="-10" max="10" step=".1" value="0"></label>
+            </div>
+            <div class="control-pair">
+              <label class="quick-control"><span>Vertical <b id="qVerticalVal">0.0</b></span><input id="qVertical" type="range" min="-10" max="10" step=".1" value="0"></label>
+              <label class="quick-control"><span>Tilt <b id="qTiltVal">0.0</b></span><input id="qTilt" type="range" min="-10" max="10" step=".1" value="0"></label>
+            </div>
+            <div class="control-pair">
+              <label class="quick-control"><span>Zoom <b id="qZoomVal">0.0</b></span><input id="qZoom" type="range" min="-10" max="10" step=".1" value="0"></label>
+              <label class="quick-control"><span>Rotate <b id="qRotateVal">0.0</b></span><input id="qRotate" type="range" min="-10" max="10" step=".1" value="0"></label>
+            </div>
+            <div class="axes-actions">
+              <button id="qReset" type="button">Reset axes</button>
+              <button id="qApply" type="button">Apply move</button>
+            </div>
+          </div>
+        </details>
+
+        <label class="field">
+          <span>Move</span>
+          <select id="segments"></select>
+        </label>
+
+        <div class="speed-control">
+          <div class="control-head">
+            <label id="speedLabel" for="speed">Speed</label>
+            <span id="speedVal">1.00×</span>
+          </div>
+          <input id="speed" type="range" min=".25" max="3" step=".05" value="1">
         </div>
-        <div class="control-pair">
-          <label class="quick-control"><span>Zoom <b id="qZoomVal">0.0</b></span><input id="qZoom" type="range" min="-10" max="10" step=".1" value="0"></label>
-          <label class="quick-control"><span>Rotate <b id="qRotateVal">0.0</b></span><input id="qRotate" type="range" min="-10" max="10" step=".1" value="0"></label>
+
+        <div class="points" id="points"></div>
+
+        <div class="point-actions">
+          <button class="continue-btn" id="addPoint" type="button">＋ Next</button>
+          <button class="delete-btn" id="deletePoint" type="button">Delete</button>
         </div>
-        <div class="axes-actions">
-          <button id="qReset" type="button">Reset</button>
-          <button id="qApply" type="button">Apply</button>
+
+        <details class="timing-detail">
+          <summary>Timing</summary>
+          <div class="control">
+            <div class="control-head"><label for="duration">Duration</label><span id="durationVal">2.0 s</span></div>
+            <input id="duration" type="range" min=".5" max="8" step=".1" value="2">
+          </div>
+          <div class="control">
+            <div class="control-head"><label for="accelIn">Accel</label><span id="accelInVal">5.0</span></div>
+            <input id="accelIn" type="range" min="0" max="10" step=".1" value="5">
+          </div>
+          <div class="control">
+            <div class="control-head"><label for="brakeOut">Brake</label><span id="brakeOutVal">5.0</span></div>
+            <input id="brakeOut" type="range" min="0" max="10" step=".1" value="5">
+          </div>
+          <div id="segmentSummary" class="segment-summary"></div>
+        </details>
+
+        <div class="advanced-actions">
+          <button id="playSequence" type="button">Play all</button>
+          <button id="loop" type="button">Loop</button>
+          <button id="reset" type="button">Reset demo</button>
         </div>
       </div>
     </details>
 
-    <label class="field">
-      <span>Move</span>
-      <select id="segments"></select>
-    </label>
-
-    <div class="speed-control">
-      <div class="control-head">
-        <label id="speedLabel" for="speed">Speed</label>
-        <span id="speedVal">1.00×</span>
-      </div>
-      <input id="speed" type="range" min=".25" max="3" step=".05" value="1">
-    </div>
-
-    <div class="points" id="points"></div>
-
-    <div class="point-actions">
-      <button class="continue-btn" id="addPoint" type="button">＋ Next</button>
-      <button class="delete-btn" id="deletePoint" type="button">Delete</button>
-    </div>
-
-    <details class="timing-detail">
-      <summary>Timing</summary>
-      <div class="control">
-        <div class="control-head"><label for="duration">Duration</label><span id="durationVal">2.0 s</span></div>
-        <input id="duration" type="range" min=".5" max="8" step=".1" value="2">
-      </div>
-      <div class="control">
-        <div class="control-head"><label for="accelIn">Accel</label><span id="accelInVal">5.0</span></div>
-        <input id="accelIn" type="range" min="0" max="10" step=".1" value="5">
-      </div>
-      <div class="control">
-        <div class="control-head"><label for="brakeOut">Brake</label><span id="brakeOutVal">5.0</span></div>
-        <input id="brakeOut" type="range" min="0" max="10" step=".1" value="5">
-      </div>
-      <div id="segmentSummary" class="segment-summary"></div>
-    </details>
-
-    <div class="advanced-actions">
-      <button id="playSequence" type="button">Play all</button>
-      <button id="loop" type="button">Loop</button>
-      <button id="reset" type="button">Reset</button>
+    <div class="sidebar-signoff">
+      <span>Same space.</span>
+      <b>New perspectives.</b>
+      <small>CameraControl3D</small>
     </div>
   </aside>
 </main>
