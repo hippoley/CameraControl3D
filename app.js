@@ -280,6 +280,99 @@ function buildRoom(){
 }
 buildRoom();
 
+const authoredPathMaterial=new THREE.LineBasicMaterial({
+  color:0xc78cff,
+  transparent:true,
+  opacity:.40,
+  depthTest:true,
+  depthWrite:false
+});
+const authoredPointMaterial=new THREE.PointsMaterial({
+  color:0xd9b3ff,
+  size:.055,
+  sizeAttenuation:true,
+  transparent:true,
+  opacity:.72,
+  depthTest:true,
+  depthWrite:false
+});
+const livePathMaterial=new THREE.LineBasicMaterial({
+  color:0xffe08b,
+  transparent:true,
+  opacity:.96,
+  depthTest:true,
+  depthWrite:false
+});
+const livePointMaterial=new THREE.PointsMaterial({
+  color:0xffe7a8,
+  size:.085,
+  sizeAttenuation:true,
+  transparent:true,
+  opacity:.98,
+  depthTest:true,
+  depthWrite:false
+});
+const authoredPathGeometry=new THREE.BufferGeometry();
+const livePathGeometry=new THREE.BufferGeometry();
+const authoredPathLine=new THREE.Line(authoredPathGeometry,authoredPathMaterial);
+const authoredPathDots=new THREE.Points(authoredPathGeometry,authoredPointMaterial);
+const livePathLine=new THREE.Line(livePathGeometry,livePathMaterial);
+const livePathDots=new THREE.Points(livePathGeometry,livePointMaterial);
+authoredPathLine.renderOrder=2;
+authoredPathDots.renderOrder=2;
+livePathLine.renderOrder=3;
+livePathDots.renderOrder=3;
+scene.add(authoredPathLine,authoredPathDots,livePathLine,livePathDots);
+let pathVisualKey='';
+
+function replaceSharedPathGeometry(line,dots,points){
+  const old=line.geometry;
+  const geometry=new THREE.BufferGeometry();
+  if(points.length)geometry.setFromPoints(points);
+  line.geometry=geometry;
+  dots.geometry=geometry;
+  if(old && old!==geometry)old.dispose();
+  const visible=points.length>1;
+  line.visible=visible;
+  dots.visible=visible;
+}
+function syncWorldPathVisual(force=false){
+  const s=shot();
+  const last=s.points[s.points.length-1]||[0,0,0];
+  const liveCount=pilotState.active?pilotState.samples.length:0;
+  const key=[
+    currentShotIndex,s.points.length,
+    last.map(v=>(+v||0).toFixed(2)).join(','),
+    liveCount,
+    pilotState.active?camera.position.x.toFixed(2):'x',
+    pilotState.active?camera.position.y.toFixed(2):'y',
+    pilotState.active?camera.position.z.toFixed(2):'z',
+    playing?'p':'a',navigationMode?'n':'e'
+  ].join('|');
+  if(!force && key===pathVisualKey)return;
+  pathVisualKey=key;
+
+  const showAuthoring=!playing && !navigationMode;
+  authoredPathLine.visible=authoredPathDots.visible=showAuthoring;
+  livePathLine.visible=livePathDots.visible=showAuthoring && pilotState.active;
+
+  if(showAuthoring){
+    const authored=(s.points||[]).map(p=>new THREE.Vector3(p[0],p[1],p[2]));
+    replaceSharedPathGeometry(authoredPathLine,authoredPathDots,authored);
+    authoredPathLine.visible=authoredPathDots.visible=authored.length>1;
+
+    if(pilotState.active){
+      const live=pilotState.samples.map(sample=>sample.position.clone());
+      const tail=live[live.length-1];
+      if(!tail || tail.distanceTo(camera.position)>.01)live.push(camera.position.clone());
+      replaceSharedPathGeometry(livePathLine,livePathDots,live);
+      livePathLine.visible=livePathDots.visible=live.length>1;
+    }else{
+      replaceSharedPathGeometry(livePathLine,livePathDots,[]);
+    }
+  }
+}
+
 const defaultShots = [
   {
     id:'establish', name:'01 · Establish', targetId:'room',
@@ -1323,6 +1416,13 @@ const pilotState={
   basisForward:new THREE.Vector3(0,0,-1),
   basisRight:new THREE.Vector3(1,0,0),
   startPosition:new THREE.Vector3(),
+  currentPosition:new THREE.Vector3(),
+  lastX:0,
+  lastY:0,
+  lastRadius:0,
+  depthOffset:0,
+  lastDepthOffset:0,
+  depthTravel:0,
   intent:'free',
   samples:[]
 };
@@ -1749,6 +1849,13 @@ function beginPilotGesture(e){
   pilotState.moved=false;
   pilotState.intent='free';
   pilotState.startPosition.copy(camera.position);
+  pilotState.currentPosition.copy(camera.position);
+  pilotState.lastX=pilotState.anchorX;
+  pilotState.lastY=pilotState.anchorY;
+  pilotState.lastRadius=0;
+  pilotState.depthOffset=0;
+  pilotState.lastDepthOffset=0;
+  pilotState.depthTravel=0;
 
   const startTarget=targetFor(shot());
   pilotState.basisForward.copy(startTarget).sub(camera.position);
@@ -1765,7 +1872,7 @@ function beginPilotGesture(e){
   }];
   try{e.currentTarget?.setPointerCapture?.(e.pointerId)}catch{}
   ui.stage?.classList.add('piloting');
-  setStatus('STEER · RELEASE TO KEEP');
+  setStatus('DRAW 3D LINE · OUT=FORWARD · BACK=REVERSE');
 }
 
 function updatePilotPointer(e){
@@ -1783,87 +1890,86 @@ function updatePilotPointer(e){
 function updatePilot(dt,nowMs){
   if(!pilotState.active)return;
   const g=stageMetrics();
-  const radius=Math.max(140,Math.min(g.w,g.h)*.30);
-  const nx=clamp((pilotState.x-pilotState.anchorX)/radius,-1,1);
-  const ny=clamp((pilotState.y-pilotState.anchorY)/radius,-1,1);
-  const mag=clamp(Math.hypot(nx,ny),0,1);
-  const drive=smoothstep01(clamp((mag-.06)/.94,0,1));
-  if(drive<=0)return;
+  const x=pilotState.x,y=pilotState.y;
+  const dxPx=x-pilotState.lastX;
+  const dyPx=y-pilotState.lastY;
+  const relX=x-pilotState.anchorX;
+  const relY=y-pilotState.anchorY;
+  const radiusPx=Math.hypot(relX,relY);
+  const radialPx=radiusPx-pilotState.lastRadius;
+  const wheelDepth=pilotState.depthOffset-pilotState.lastDepthOffset;
 
-  const target=targetFor(shot());
+  if(Math.abs(dxPx)+Math.abs(dyPx)<.01 && Math.abs(wheelDepth)<.0001)return;
+
   const worldUp=new THREE.Vector3(0,1,0);
   const forward=pilotState.basisForward;
   const right=pilotState.basisRight;
 
-  const ax=Math.abs(nx),ay=Math.abs(ny);
-  const verticalIntent=smoothstep01(clamp((ay-ax*1.08)/.30,0,1));
-  const horizontalIntent=smoothstep01(clamp((ax-ay*1.08)/.30,0,1));
-  const travelPx=Math.hypot(
-    pilotState.x-pilotState.anchorX,
-    pilotState.y-pilotState.anchorY
-  );
+  // The pointer is a 3D pen:
+  //   screen X  -> camera-right
+  //   screen Y  -> world-up
+  //   moving away from the gesture origin -> forward depth
+  //   moving back toward the origin       -> reverse depth
+  // Wheel while drawing is an optional precision push/pull, not a separate mode.
+  const lateralScale=4.8/Math.max(520,g.w);
+  const verticalScale=3.35/Math.max(420,g.h);
+  const depthScale=5.0/Math.max(520,Math.min(g.w,g.h));
+  const radialDepth=radialPx*depthScale;
+  const depthStep=radialDepth+wheelDepth;
 
-  // Once a stroke is clearly axial, lock the interpretation for this gesture.
-  // That prevents tiny hand wobble from flipping between crane / drive semantics.
-  if(pilotState.intent==='free' && travelPx>18){
-    if(verticalIntent>.82){
-      pilotState.intent='crane';
-      setStatus(ny<0?'CRANE · DRAW UP':'CRANE · DRAW DOWN');
-    }else if(horizontalIntent>.82){
-      pilotState.intent='truck';
-      setStatus(nx<0?'TRUCK · DRAW LEFT':'TRUCK · DRAW RIGHT');
-    }
-  }
+  const delta=right.clone().multiplyScalar(dxPx*lateralScale)
+    .addScaledVector(worldUp,-dyPx*verticalScale)
+    .addScaledVector(forward,depthStep);
 
-  let next;
-  if(pilotState.intent==='crane'){
-    const metersPerPixel=3.15/Math.max(360,g.h);
-    const axisMeters=-(pilotState.y-pilotState.anchorY)*metersPerPixel;
-    const depthEase=smoothstep01(clamp(Math.abs(axisMeters)/1.8,0,1));
-    const depthMeters=Math.min(.58,Math.abs(axisMeters)*.20)*depthEase;
-    next=pilotState.startPosition.clone()
-      .addScaledVector(worldUp,axisMeters)
-      .addScaledVector(forward,depthMeters);
-  }else if(pilotState.intent==='truck'){
-    const metersPerPixel=4.6/Math.max(520,g.w);
-    const axisMeters=(pilotState.x-pilotState.anchorX)*metersPerPixel;
-    const depthEase=smoothstep01(clamp(Math.abs(axisMeters)/2.2,0,1));
-    const depthMeters=Math.min(.72,Math.abs(axisMeters)*.18)*depthEase;
-    next=pilotState.startPosition.clone()
-      .addScaledVector(right,axisMeters)
-      .addScaledVector(forward,depthMeters);
-  }else{
-    // Free stroke remains depth-capable. Near an axis, forward motion is reduced
-    // until the gesture locks into a crane / truck with explicit parallax.
-    const axisIntent=Math.max(verticalIntent,horizontalIntent);
-    const freeIntent=1-axisIntent;
-    const direction=forward.clone().multiplyScalar(.72*freeIntent)
-      .addScaledVector(right,nx*(1.12+.23*freeIntent))
-      .addScaledVector(worldUp,-ny*(1.08-.13*freeIntent));
-    if(direction.lengthSq()<.0001)return;
-    direction.normalize();
-    const speed=.35 + drive*2.35;
-    next=camera.position.clone().addScaledVector(direction,speed*dt);
-  }
+  // Suppress tiny pointer noise without flattening the authored line.
+  if(delta.lengthSq()<1e-7)return;
+
+  const next=pilotState.currentPosition.clone().add(delta);
   next.x=clamp(next.x,-5.2,5.2);
   next.y=clamp(next.y,.35,3.7);
   next.z=clamp(next.z,-5.2,7.8);
 
-  applyCameraState({position:next,target:target.clone(),roll:shot().roll||0});
+  pilotState.currentPosition.copy(next);
+  pilotState.lastX=x;
+  pilotState.lastY=y;
+  pilotState.lastRadius=radiusPx;
+  pilotState.lastDepthOffset=pilotState.depthOffset;
+  pilotState.depthTravel+=depthStep;
 
-  if(nowMs-pilotState.lastSampleMs>=55){
+  const ax=Math.abs(relX),ay=Math.abs(relY);
+  if(Math.abs(depthStep)>.045){
+    pilotState.intent=depthStep>0?'dolly-in':'dolly-out';
+  }else if(ay>ax*1.22){
+    pilotState.intent='crane';
+  }else if(ax>ay*1.22){
+    pilotState.intent='truck';
+  }else{
+    pilotState.intent='free';
+  }
+
+  const depthLabel=(pilotState.depthTravel>=0?'+':'')+pilotState.depthTravel.toFixed(2)+'m';
+  if(pilotState.intent==='dolly-in')setStatus('3D LINE · FORWARD · DEPTH '+depthLabel);
+  else if(pilotState.intent==='dolly-out')setStatus('3D LINE · REVERSE · DEPTH '+depthLabel);
+  else if(pilotState.intent==='crane')setStatus('3D LINE · CRANE · DEPTH '+depthLabel);
+  else if(pilotState.intent==='truck')setStatus('3D LINE · TRUCK · DEPTH '+depthLabel);
+  else setStatus('3D LINE · FREE · DEPTH '+depthLabel);
+
+  applyCameraState({position:next,target:targetFor(shot()).clone(),roll:shot().roll||0});
+
+  if(nowMs-pilotState.lastSampleMs>=45){
     const elapsed=nowMs-pilotState.startMs;
     const last=pilotState.samples[pilotState.samples.length-1];
-    if(!last || last.position.distanceTo(next)>.035){
+    if(!last || last.position.distanceTo(next)>.028){
       pilotState.samples.push({
         position:next.clone(),
         time:elapsed,
         screen:{x:pilotState.x,y:pilotState.y}
       });
-      if(pilotState.samples.length>180)pilotState.samples.shift();
+      if(pilotState.samples.length>220)pilotState.samples.shift();
       pilotState.lastSampleMs=nowMs;
     }
   }
+  syncWorldPathVisual();
 }
 
 function compactPilotSamples(samples,maxPoints=18){
@@ -1932,7 +2038,7 @@ function commitPilotGesture(){
   playhead=shotDuration(s);
   refreshUI();
   refreshTimeline();
-  setStatus('CONTINUE · STEER AGAIN');
+  setStatus('3D LINE KEPT · DRAW AGAIN');
   return true;
 }
 
@@ -1960,7 +2066,7 @@ function endPilotGesture(e){
 
   if(!wasMoved){
     selectTargetAt(startClientX,startClientY);
-    setStatus('TARGET SELECTED · HOLD TO STEER');
+    setStatus('TARGET SELECTED · DRAW A 3D LINE');
   }else{
     commitPilotGesture();
   }
@@ -1969,10 +2075,21 @@ function endPilotGesture(e){
   pilotState.captureEl=null;
   pilotState.intent='free';
   pilotState.samples=[];
+  pilotState.depthOffset=0;
+  pilotState.lastDepthOffset=0;
+  pilotState.depthTravel=0;
+  syncWorldPathVisual(true);
   drawFrameOverlay();
 }
 
 window.addEventListener('pointermove',updatePilotPointer,{passive:true});
+renderer.domElement.addEventListener('wheel',e=>{
+  if(!pilotState.active)return;
+  e.preventDefault();
+  const delta=clamp(-e.deltaY*.0018,-.42,.42);
+  pilotState.depthOffset=clamp(pilotState.depthOffset+delta,-3.2,3.2);
+  pilotState.moved=true;
+},{passive:false});
 window.addEventListener('pointerup',endPilotGesture);
 window.addEventListener('pointercancel',endPilotGesture);
 
@@ -2176,7 +2293,7 @@ ui.homeView.addEventListener('click',()=>{
   navigationMode=!navigationMode;
   if(navigationMode)resetMotionGesture();
   syncNavigationMode();
-  setStatus(navigationMode?'NAVIGATE · DRAG SCENE':'AUTHOR · HOLD + STEER');
+  setStatus(navigationMode?'NAVIGATE · DRAG SCENE':'AUTHOR · DRAW 3D LINE');
 });
 
 function resizeRenderer(){
@@ -2424,6 +2541,7 @@ function animate(ts){
   } else {
     controls.update();
   }
+  syncWorldPathVisual();
   drawMini(topCtx,ui.top,'top');
   drawMini(sideCtx,ui.side,'side');
   drawFrameOverlay();
@@ -2440,6 +2558,6 @@ applyCameraState(cameraStateAt(shot(),0));
 navigationMode=false;
 syncNavigationMode();
 resetMotionGesture();
-setStatus('HOLD + STEER');
+setStatus('DRAW A 3D LINE');
 ui.loading.classList.add('hidden');
 requestAnimationFrame(animate);
