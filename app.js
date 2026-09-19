@@ -67,7 +67,11 @@ const ui = {
   advancedDrawer: $('advancedDrawer'),
   advancedToggle: $('advancedToggle'),
   advancedClose: $('advancedClose'),
-  stabilizePath: $('stabilizePath')
+  stabilizePath: $('stabilizePath'),
+  shotStrip: $('shotStrip'),
+  timelineMeta: $('timelineMeta'),
+  focusPreviewName: $('focusPreviewName'),
+  quickReset: $('quickReset')
 };
 
 function setAdvancedOpen(open){
@@ -649,7 +653,7 @@ function clearSilky(s){
   silkyMotionCache.delete(s);
   if(s===shot() && ui.stabilizePath){
     ui.stabilizePath.classList.remove('active','done');
-    ui.stabilizePath.textContent='一键防抖防止卡顿';
+    syncStabilizeButton();
   }
 }
 function silkyCurveFor(s){
@@ -1028,10 +1032,58 @@ function setTargetMarker(){
 }
 function setStatus(text){ ui.status.textContent=text; }
 
+function syncMainPlayButton(){
+  if(!ui.play)return;
+  const label=ui.play.querySelector('b');
+  const small=ui.play.querySelector('small');
+  const icon=ui.play.querySelector('.hero-icon');
+  if(label){
+    label.textContent=playing?'Pause':'Play';
+    if(small)small.textContent=playing?'Camera is moving':'Preview current shot';
+    if(icon)icon.textContent=playing?'Ⅱ':'▶';
+  }else{
+    syncMainPlayButton();
+  }
+}
+function syncStabilizeButton(){
+  if(!ui.stabilizePath)return;
+  const active=!!shot().stabilized;
+  ui.stabilizePath.classList.toggle('active',active);
+  const label=ui.stabilizePath.querySelector('b');
+  const small=ui.stabilizePath.querySelector('small');
+  if(label){
+    label.textContent='Motion Smoothing';
+    if(small)small.textContent=active?'5th-order flow · active':'5th-order flow';
+  }else{
+    ui.stabilizePath.textContent=active?'5th-order flow · active':'Motion Smoothing';
+  }
+}
+function syncFocusButtons(){
+  const active=subjectIdAtTime(shot(),playhead);
+  document.querySelectorAll('[data-focus-target]').forEach(btn=>{
+    btn.classList.toggle('active',btn.dataset.focusTarget===active);
+  });
+  if(ui.focusPreviewName)ui.focusPreviewName.textContent=targetDefs[active]?.label||'Subject';
+}
+function renderShotStrip(){
+  if(!ui.shotStrip)return;
+  ui.shotStrip.innerHTML='';
+  shots.forEach((s,i)=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='shot-tile'+(i===currentShotIndex?' active':'');
+    const name=s.name.replace(/^\d+\s*·\s*/,'');
+    b.innerHTML='<span class="shot-index">'+(i+1)+'</span><span class="shot-copy"><b>'+name+'</b><small>'+shotDuration(s).toFixed(1)+'s · '+(targetDefs[s.targetId]?.label||'Subject')+'</small></span>';
+    b.addEventListener('click',()=>switchShot(i,true));
+    ui.shotStrip.appendChild(b);
+  });
+  if(ui.timelineMeta)ui.timelineMeta.textContent=shots.length+' shots · '+totalSequenceDuration().toFixed(1)+'s';
+}
+
 function stopPlayback(){
   playing=false;
   resetPerceptualState();
-  ui.play.textContent='▶ Play';
+  syncMainPlayButton();
   const q=$('quickPlay'); if(q) q.textContent='▶ Preview shot';
   syncNavigationMode();
 }
@@ -1044,8 +1096,7 @@ function switchShot(index,snap=true){
   if(snap) applyCameraState(cameraStateAt(shot(),0));
   resetMotionGesture();
   if(ui.stabilizePath){
-    ui.stabilizePath.classList.toggle('active',!!shot().stabilized);
-    ui.stabilizePath.textContent=shot().stabilized?'已防抖 · 五阶丝滑':'一键防抖防止卡顿';
+    syncStabilizeButton();
   }
   setStatus('SHOT · '+shot().name.toUpperCase());
 }
@@ -1132,9 +1183,14 @@ function refreshTimeline(){
   ui.timeline.value=playhead;
   ui.readout.textContent=playhead.toFixed(2)+' s';
   ui.totalReadout.textContent=total.toFixed(2)+' s';
+  syncFocusButtons();
 }
 function refreshUI(){
   renderShots();renderTargets();renderPoints();renderSegments();renderTiming();refreshTimeline();
+  renderShotStrip();
+  syncFocusButtons();
+  syncStabilizeButton();
+  syncMainPlayButton();
 }
 
 function setSegment(prop,value){
@@ -1298,7 +1354,7 @@ function stabilizeCurrentPath(){
   if(ui.stabilizePath){
     ui.stabilizePath.classList.add('active');
     ui.stabilizePath.classList.remove('done');
-    ui.stabilizePath.textContent='已防抖 · 五阶丝滑';
+    syncStabilizeButton();
     requestAnimationFrame(()=>ui.stabilizePath?.classList.add('done'));
     setTimeout(()=>ui.stabilizePath?.classList.remove('done'),520);
   }
@@ -1334,6 +1390,32 @@ quickPlay?.addEventListener('click',()=>{
   syncPlayLabels();
 });
 quickStart?.addEventListener('click',()=>ui.origin.click());
+ui.quickReset?.addEventListener('click',()=>ui.reset.click());
+
+document.querySelectorAll('[data-focus-target]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const id=btn.dataset.focusTarget;
+    if(!targetDefs[id])return;
+    const result=setSubjectAtTime(shot(),id,playhead,playing);
+    setTargetMarker();
+    refreshUI();
+    applyCameraState(cameraStateAt(shot(),playhead));
+    setStatus(result.live?'LIVE FOCUS → '+targetDefs[id].label.toUpperCase():'SUBJECT → '+targetDefs[id].label.toUpperCase());
+  });
+});
+
+window.addEventListener('keydown',e=>{
+  const tag=e.target?.tagName?.toLowerCase();
+  if(tag==='input'||tag==='select'||tag==='textarea'||e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.code==='Space'){
+    e.preventDefault();
+    ui.play.click();
+  }else if(e.key==='s'||e.key==='S'){
+    ui.stabilizePath?.click();
+  }else if(e.key==='r'||e.key==='R'){
+    ui.quickReset?.click();
+  }
+});
 
 document.querySelectorAll('[data-motion-preset]').forEach(btn=>{
   btn.addEventListener('click',()=>{
@@ -2525,12 +2607,12 @@ function animate(ts){
         }else if(looping){
           currentShotIndex=0;sequenceIndex=0;selectedPoint=0;selectedSegment=0;playhead=0;setTargetMarker();refreshUI();
         }else{
-          playhead=total;playing=false;syncNavigationMode();ui.play.textContent='▶ Play';syncPlayLabels();setStatus('SEQUENCE FINISHED');
+          playhead=total;playing=false;syncNavigationMode();syncMainPlayButton();syncPlayLabels();setStatus('SEQUENCE FINISHED');
         }
       }else if(looping){
         playhead=0;
       }else{
-        playhead=total;playing=false;syncNavigationMode();ui.play.textContent='▶ Play';syncPlayLabels();setStatus('SHOT FINISHED');
+        playhead=total;playing=false;syncNavigationMode();syncMainPlayButton();syncPlayLabels();setStatus('SHOT FINISHED');
       }
     }
     if(playing || playhead<=shotDuration()) applyCameraState(cameraStateAt(shot(),playhead));
