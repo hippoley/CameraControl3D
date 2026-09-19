@@ -1,8 +1,6 @@
-name: Deploy CameraControl3D
+name: Deploy CameraControl3D to GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -20,17 +18,28 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout full project
         uses: actions/checkout@v4
+
+      - name: Verify project
+        run: |
+          set -euo pipefail
+          test -f index.html
+          test -f styles.css
+          test -f app.js
+          cp app.js /tmp/app.mjs
+          node --check /tmp/app.mjs
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - name: Upload static site
+
+      - name: Upload full static project
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
