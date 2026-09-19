@@ -443,15 +443,78 @@ const lookHandle=new THREE.Mesh(
 );
 lookHandle.userData.cameraPoseHandle='look';
 lookHandle.renderOrder=8;
-scene.add(startFrustum,endFrustum,liveFrustum,selectedFrustum,poseHandleGroup,lookGuide,lookHandle);
+const ghostFrustums=Array.from({length:4},()=>{
+  const g=makeFrustumGlyph(0x9b7ee8,.54,false);
+  g.traverse(o=>{
+    if(o.material){
+      o.material=o.material.clone();
+      o.material.opacity*=.34;
+    }
+  });
+  return g;
+});
 
-function setFrustumPose(group,position,target,roll=0){
+const fovHandle=new THREE.Mesh(
+  new THREE.SphereGeometry(.082,16,10),
+  new THREE.MeshBasicMaterial({
+    color:0xffd66f,
+    transparent:true,
+    opacity:.96,
+    depthWrite:false,
+    depthTest:true
+  })
+);
+fovHandle.userData.cameraPoseHandle='fov';
+fovHandle.renderOrder=8;
+
+const rollHandleGroup=new THREE.Group();
+const rollHandleRing=new THREE.Mesh(
+  new THREE.TorusGeometry(.54,.018,10,48),
+  new THREE.MeshBasicMaterial({
+    color:0xbda3ff,
+    transparent:true,
+    opacity:.72,
+    depthWrite:false,
+    depthTest:true
+  })
+);
+rollHandleRing.userData.cameraPoseHandle='roll';
+rollHandleRing.renderOrder=7;
+const rollHandleBead=new THREE.Mesh(
+  new THREE.SphereGeometry(.06,14,10),
+  new THREE.MeshBasicMaterial({
+    color:0xffffff,
+    transparent:true,
+    opacity:.96,
+    depthWrite:false,
+    depthTest:true
+  })
+);
+rollHandleBead.position.set(0,.54,0);
+rollHandleBead.userData.cameraPoseHandle='roll';
+rollHandleBead.renderOrder=8;
+rollHandleGroup.add(rollHandleRing,rollHandleBead);
+
+scene.add(
+  startFrustum,endFrustum,liveFrustum,selectedFrustum,
+  ...ghostFrustums,
+  poseHandleGroup,lookGuide,lookHandle,fovHandle,rollHandleGroup
+);
+
+function fovScaleFor(fov=BASE_FOV){
+  const base=Math.tan(THREE.MathUtils.degToRad(BASE_FOV)*.5);
+  const value=Math.tan(THREE.MathUtils.degToRad(clamp(fov,18,100))*.5);
+  return clamp(value/Math.max(.0001,base),.45,2.1);
+}
+function setFrustumPose(group,position,target,roll=0,fov=BASE_FOV){
   frustumAimCamera.position.copy(position);
   frustumAimCamera.up.set(0,1,0);
   frustumAimCamera.lookAt(target);
   frustumAimCamera.rotateZ(roll||0);
   group.position.copy(position);
   group.quaternion.copy(frustumAimCamera.quaternion);
+  const fs=fovScaleFor(fov);
+  group.scale.set(fs,fs,1);
 }
 function syncPosePointHandles(showAuthoring){
   const s=shot();
@@ -499,29 +562,57 @@ function syncFrustumVisuals(showAuthoring){
   liveFrustum.visible=showAuthoring && pilotState.active;
   lookHandle.visible=showAuthoring;
   lookGuide.visible=showAuthoring;
+  fovHandle.visible=showAuthoring;
+  rollHandleGroup.visible=showAuthoring;
+  ghostFrustums.forEach(g=>g.visible=showAuthoring);
 
   syncPosePointHandles(showAuthoring);
 
   if(showAuthoring){
-    setFrustumPose(startFrustum,startState.position,startState.target,startState.roll);
-    setFrustumPose(endFrustum,endState.position,endState.target,endState.roll);
-    setFrustumPose(selectedFrustum,selected.position,selected.target,selected.roll);
+    setFrustumPose(startFrustum,startState.position,startState.target,startState.roll,startState.fov);
+    setFrustumPose(endFrustum,endState.position,endState.target,endState.roll,endState.fov);
+    setFrustumPose(selectedFrustum,selected.position,selected.target,selected.roll,selected.fov);
+
+    const fractions=[.20,.40,.60,.80];
+    ghostFrustums.forEach((g,i)=>{
+      const st=cameraStateAt(s,total*fractions[i]);
+      setFrustumPose(g,st.position,st.target,st.roll,st.fov);
+    });
 
     const direction=selected.target.clone().sub(selected.position);
     const targetDistance=Math.max(1.2,direction.length());
     if(direction.lengthSq()<1e-6)direction.set(0,0,-1);
     else direction.normalize();
+
     const handleDistance=clamp(targetDistance*.34,1.05,1.75);
     lookHandle.position.copy(selected.position).addScaledVector(direction,handleDistance);
     lookGuide.geometry.setFromPoints([selected.position,lookHandle.position]);
     lookGuide.computeLineDistances();
+
+    // Lens/FOV handle sits on the right edge of the selected frustum's image plane.
+    const fs=fovScaleFor(selected.fov);
+    const localFovEdge=new THREE.Vector3(
+      selectedFrustum.userData.frustumWidth*fs,
+      0,
+      -selectedFrustum.userData.frustumDepth
+    );
+    fovHandle.position.copy(localFovEdge)
+      .applyQuaternion(selectedFrustum.quaternion)
+      .add(selected.position);
+
+    // Roll ring is oriented with the selected camera, around its optical axis.
+    rollHandleGroup.position.copy(selected.position);
+    rollHandleGroup.quaternion.copy(selectedFrustum.quaternion);
+    const ringScale=clamp(.84+fs*.12,.9,1.18);
+    rollHandleGroup.scale.setScalar(ringScale);
 
     if(pilotState.active){
       setFrustumPose(
         liveFrustum,
         camera.position,
         targetFor(s).clone(),
-        s.roll||0
+        s.roll||0,
+        camera.fov
       );
     }
   }
@@ -543,8 +634,12 @@ function syncWorldPathVisual(force=false){
   const s=shot();
   const last=s.points[s.points.length-1]||[0,0,0];
   const liveCount=pilotState.active?pilotState.samples.length:0;
+  const poseKey=ensurePoseKeys(s)[selectedPoint]||{};
   const key=[
     currentShotIndex,selectedPoint,s.points.length,
+    Array.isArray(poseKey.lookAt)?poseKey.lookAt.map(v=>(+v||0).toFixed(2)).join(','):'auto',
+    Number.isFinite(poseKey.fov)?poseKey.fov.toFixed(1):'auto-fov',
+    Number.isFinite(poseKey.roll)?poseKey.roll.toFixed(3):'auto-roll',
     last.map(v=>(+v||0).toFixed(2)).join(','),
     liveCount,
     pilotState.active?camera.position.x.toFixed(2):'x',
@@ -697,6 +792,16 @@ function poseFovOnSegment(s,segment,u){
   const fa=Number.isFinite(a?.fov)?a.fov:BASE_FOV;
   const fb=Number.isFinite(b?.fov)?b.fov:BASE_FOV;
   return mix(fa,fb,fifthOrderStep01(clamp(u,0,1)));
+}
+function poseRollOnSegment(s,segment,u){
+  const a=poseKeyForPoint(s,segment);
+  const b=poseKeyForPoint(s,Math.min(segment+1,s.points.length-1));
+  const ra=Number.isFinite(a?.roll)?a.roll:(s.roll||0);
+  const rb=Number.isFinite(b?.roll)?b.roll:(s.roll||0);
+  let delta=rb-ra;
+  while(delta>Math.PI)delta-=Math.PI*2;
+  while(delta<-Math.PI)delta+=Math.PI*2;
+  return ra+delta*fifthOrderStep01(clamp(u,0,1));
 }
 function rawTargetPosition(id,s=shot()){
   const def=targetDefs[id] || targetDefs.room;
@@ -1046,7 +1151,7 @@ function cameraStateAt(s,time){
       position:p,
       target:poseTargetOnSegment(s,segment,local,time),
       fov:poseFovOnSegment(s,segment,local),
-      roll:(s.roll||0)+silkyBankAt(s,pathU),
+      roll:poseRollOnSegment(s,segment,local)+silkyBankAt(s,pathU),
       segment,
       u:pathU
     };
@@ -1058,7 +1163,7 @@ function cameraStateAt(s,time){
     position:new THREE.Vector3(...p),
     target:poseTargetOnSegment(s,hit.i,u,time),
     fov:poseFovOnSegment(s,hit.i,u),
-    roll:s.roll||0,
+    roll:poseRollOnSegment(s,hit.i,u),
     segment:hit.i,
     u
   };
@@ -2750,6 +2855,29 @@ function drawMini(context,canvas,mode){
       context.fillText('NEXT '+preview.end.y.toFixed(2)+'m',Math.min(m.w-78,b[0]+9),Math.max(18,b[1]-7));
     }
   }
+  const selectedPose=poseStateForPoint(s,selectedPoint);
+  const selectedP=mode==='top'
+    ? m.map(selectedPose.position.x,selectedPose.position.z)
+    : m.map(selectedPose.position.z,selectedPose.position.y);
+  const selectedT=mode==='top'
+    ? m.map(selectedPose.target.x,selectedPose.target.z)
+    : m.map(selectedPose.target.z,selectedPose.target.y);
+  let vx=selectedT[0]-selectedP[0],vy=selectedT[1]-selectedP[1];
+  const vl=Math.hypot(vx,vy)||1;vx/=vl;vy/=vl;
+  const fovHalf=THREE.MathUtils.degToRad(clamp(selectedPose.fov,24,82))*.5;
+  const wedgeLen=24;
+  const ca=Math.cos(fovHalf),sa=Math.sin(fovHalf);
+  const ldx=vx*ca-vy*sa,ldy=vx*sa+vy*ca;
+  const rdx=vx*ca+vy*sa,rdy=-vx*sa+vy*ca;
+  context.strokeStyle='rgba(255,224,139,.62)';
+  context.lineWidth=1;
+  context.beginPath();
+  context.moveTo(selectedP[0],selectedP[1]);
+  context.lineTo(selectedP[0]+ldx*wedgeLen,selectedP[1]+ldy*wedgeLen);
+  context.moveTo(selectedP[0],selectedP[1]);
+  context.lineTo(selectedP[0]+rdx*wedgeLen,selectedP[1]+rdy*wedgeLen);
+  context.stroke();
+
   const cp=mode==='top'?m.map(camera.position.x,camera.position.z):m.map(camera.position.z,camera.position.y);context.fillStyle='#ffe08b';context.beginPath();context.arc(cp[0],cp[1],4,0,Math.PI*2);context.fill();
   const tar=targetFor();const tp=mode==='top'?m.map(tar.x,tar.z):m.map(tar.z,tar.y);context.fillStyle='#ffffff';context.beginPath();context.arc(tp[0],tp[1],3,0,Math.PI*2);context.fill();
   if(mode==='side' && s.points[selectedPoint]){
@@ -2812,7 +2940,7 @@ function setPointerRay(clientX,clientY){
 }
 function hitCameraPoseHandle(clientX,clientY){
   setPointerRay(clientX,clientY);
-  const objects=[...poseHandleGroup.children,lookHandle];
+  const objects=[...poseHandleGroup.children,lookHandle,fovHandle,rollHandleRing,rollHandleBead];
   const hits=raycaster.intersectObjects(objects,false);
   return hits[0]||null;
 }
@@ -2824,12 +2952,29 @@ function beginPoseDrag(e,hit){
   selectedPoint=clamp(index,0,shot().points.length-1);
   selectedSegment=clamp(Math.min(selectedPoint,shot().segments.length-1),0,shot().segments.length-1);
   const pose=poseStateForPoint(shot(),selectedPoint);
+  const key=poseKeyForPoint(shot(),selectedPoint);
+
   const normal=new THREE.Vector3();
   camera.getWorldDirection(normal);
-  const anchor=kind==='look'?lookHandle.position:pose.position;
-  poseDragPlane.setFromNormalAndCoplanarPoint(normal,anchor);
+  let anchor=pose.position;
+  if(kind==='look')anchor=lookHandle.position;
+  if(kind==='fov')anchor=fovHandle.position;
+
+  if(kind==='fov'){
+    const viewDir=pose.target.clone().sub(pose.position).normalize();
+    poseDragPlane.setFromNormalAndCoplanarPoint(viewDir,anchor);
+  }else{
+    poseDragPlane.setFromNormalAndCoplanarPoint(normal,anchor);
+  }
+
   setPointerRay(e.clientX,e.clientY);
   raycaster.ray.intersectPlane(poseDragPlane,poseDragHit);
+
+  const projected=pose.position.clone().project(camera);
+  const rr=renderer.domElement.getBoundingClientRect();
+  const centerX=rr.left+(projected.x*.5+.5)*rr.width;
+  const centerY=rr.top+(-projected.y*.5+.5)*rr.height;
+
   poseDrag={
     pointerId:e.pointerId,
     kind,
@@ -2837,39 +2982,74 @@ function beginPoseDrag(e,hit){
     startHit:poseDragHit.clone(),
     startPosition:pose.position.clone(),
     startTarget:pose.target.clone(),
-    targetDistance:Math.max(1.2,pose.position.distanceTo(pose.target))
+    targetDistance:Math.max(1.2,pose.position.distanceTo(pose.target)),
+    startFov:Number.isFinite(key.fov)?key.fov:BASE_FOV,
+    startRoll:Number.isFinite(key.roll)?key.roll:(shot().roll||0),
+    centerX,
+    centerY,
+    startAngle:Math.atan2(e.clientY-centerY,e.clientX-centerX)
   };
   try{renderer.domElement.setPointerCapture(e.pointerId)}catch{}
   syncWorldPathVisual(true);
   refreshUI();
-  setStatus(kind==='look'?'CAMERA POSE · DRAG VIEW':'CAMERA POSE · DRAG POSITION');
+
+  if(kind==='look')setStatus('CAMERA POSE · DRAG VIEW');
+  else if(kind==='fov')setStatus('CAMERA POSE · DRAG LENS');
+  else if(kind==='roll')setStatus('CAMERA POSE · DRAG ROLL');
+  else setStatus('CAMERA POSE · DRAG POSITION');
   return true;
 }
 function updatePoseDrag(e){
   if(!poseDrag || e.pointerId!==poseDrag.pointerId)return;
   e.preventDefault();
-  setPointerRay(e.clientX,e.clientY);
-  if(!raycaster.ray.intersectPlane(poseDragPlane,poseDragHit))return;
   const s=shot();
   clearSilky(s);
   const key=poseKeyForPoint(s,poseDrag.index);
-  if(poseDrag.kind==='position'){
-    const delta=poseDragHit.clone().sub(poseDrag.startHit);
-    const p=poseDrag.startPosition.clone().add(delta);
-    p.x=clamp(p.x,-5.2,5.2);
-    p.y=clamp(p.y,.35,3.7);
-    p.z=clamp(p.z,-5.2,7.8);
-    s.points[poseDrag.index]=p.toArray();
-    setStatus('CAMERA POSE · POSITION');
+
+  if(poseDrag.kind==='roll'){
+    const angle=Math.atan2(e.clientY-poseDrag.centerY,e.clientX-poseDrag.centerX);
+    let delta=angle-poseDrag.startAngle;
+    while(delta>Math.PI)delta-=Math.PI*2;
+    while(delta<-Math.PI)delta+=Math.PI*2;
+    key.roll=poseDrag.startRoll+delta;
+    setStatus('CAMERA POSE · ROLL '+THREE.MathUtils.radToDeg(key.roll).toFixed(0)+'°');
   }else{
-    const position=new THREE.Vector3(...s.points[poseDrag.index]);
-    const direction=poseDragHit.clone().sub(position);
-    if(direction.lengthSq()>.01){
-      direction.normalize();
-      key.lookAt=position.clone().addScaledVector(direction,poseDrag.targetDistance).toArray();
-      setStatus('CAMERA POSE · VIEW DIRECTION');
+    setPointerRay(e.clientX,e.clientY);
+    if(!raycaster.ray.intersectPlane(poseDragPlane,poseDragHit))return;
+
+    if(poseDrag.kind==='position'){
+      const delta=poseDragHit.clone().sub(poseDrag.startHit);
+      const p=poseDrag.startPosition.clone().add(delta);
+      p.x=clamp(p.x,-5.2,5.2);
+      p.y=clamp(p.y,.35,3.7);
+      p.z=clamp(p.z,-5.2,7.8);
+      s.points[poseDrag.index]=p.toArray();
+      setStatus('CAMERA POSE · POSITION');
+    }else if(poseDrag.kind==='look'){
+      const position=new THREE.Vector3(...s.points[poseDrag.index]);
+      const direction=poseDragHit.clone().sub(position);
+      if(direction.lengthSq()>.01){
+        direction.normalize();
+        key.lookAt=position.clone().addScaledVector(direction,poseDrag.targetDistance).toArray();
+        setStatus('CAMERA POSE · VIEW DIRECTION');
+      }
+    }else if(poseDrag.kind==='fov'){
+      const pose=poseStateForPoint(s,poseDrag.index);
+      const q=desiredCameraQuaternion(pose.position,pose.target,pose.roll);
+      const right=new THREE.Vector3(1,0,0).applyQuaternion(q).normalize();
+      const forward=new THREE.Vector3(0,0,-1).applyQuaternion(q).normalize();
+      const center=pose.position.clone().addScaledVector(forward,selectedFrustum.userData.frustumDepth);
+      const width=Math.abs(poseDragHit.clone().sub(center).dot(right));
+      const ratio=clamp(width/Math.max(.001,selectedFrustum.userData.frustumWidth),.45,2.1);
+      const baseTan=Math.tan(THREE.MathUtils.degToRad(BASE_FOV)*.5);
+      key.fov=clamp(
+        THREE.MathUtils.radToDeg(2*Math.atan(baseTan*ratio)),
+        24,82
+      );
+      setStatus('CAMERA POSE · LENS '+key.fov.toFixed(0)+'°');
     }
   }
+
   pathVisualKey='';
   syncWorldPathVisual(true);
 }
@@ -2881,7 +3061,10 @@ function endPoseDrag(e){
   relabelPoints(shot());
   refreshUI();
   syncWorldPathVisual(true);
-  setStatus(kind==='look'?'VIEW KEY SAVED':'CAMERA POSITION SAVED');
+  if(kind==='look')setStatus('VIEW KEY SAVED');
+  else if(kind==='fov')setStatus('LENS KEY SAVED');
+  else if(kind==='roll')setStatus('ROLL KEY SAVED');
+  else setStatus('CAMERA POSITION SAVED');
 }
 renderer.domElement.addEventListener('pointermove',updatePoseDrag,{capture:true});
 window.addEventListener('pointerup',endPoseDrag);
@@ -2890,7 +3073,7 @@ window.addEventListener('pointercancel',endPoseDrag);
 renderer.domElement.addEventListener('wheel',e=>{
   if(playing || navigationMode || pilotState.active || poseDrag)return;
   const hit=hitCameraPoseHandle(e.clientX,e.clientY);
-  if(!hit || (hit.object.userData.cameraPoseHandle!=='position' && hit.object!==lookHandle))return;
+  if(!hit)return;
   e.preventDefault();
   const s=shot();
   const index=hit.object.userData.cameraPoseHandle==='position'?hit.object.userData.pointIndex:selectedPoint;
