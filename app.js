@@ -327,6 +327,92 @@ authoredPathDots.renderOrder=2;
 livePathLine.renderOrder=3;
 livePathDots.renderOrder=3;
 scene.add(authoredPathLine,authoredPathDots,livePathLine,livePathDots);
+
+function makeFrustumGlyph(color,scale=1){
+  const group=new THREE.Group();
+  const d=.82*scale,w=.50*scale,h=.30*scale;
+  const bW=.24*scale,bH=.17*scale,bD=.24*scale;
+  const verts=[
+    // pyramid / viewing cone
+    0,0,0, -w,-h,-d,
+    0,0,0,  w,-h,-d,
+    0,0,0,  w, h,-d,
+    0,0,0, -w, h,-d,
+    // far rectangle
+    -w,-h,-d,  w,-h,-d,
+     w,-h,-d,  w, h,-d,
+     w, h,-d, -w, h,-d,
+    -w, h,-d, -w,-h,-d,
+    // small camera body behind the optical center
+    -bW,-bH,bD,  bW,-bH,bD,
+     bW,-bH,bD,  bW, bH,bD,
+     bW, bH,bD, -bW, bH,bD,
+    -bW, bH,bD, -bW,-bH,bD,
+    -bW,-bH,bD, -bW,-bH,0,
+     bW,-bH,bD,  bW,-bH,0,
+     bW, bH,bD,  bW, bH,0,
+    -bW, bH,bD, -bW, bH,0
+  ];
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+  const material=new THREE.LineBasicMaterial({
+    color,
+    transparent:true,
+    opacity:.92,
+    depthTest:true,
+    depthWrite:false
+  });
+  const lines=new THREE.LineSegments(geometry,material);
+  lines.renderOrder=5;
+  group.add(lines);
+
+  const apex=new THREE.Mesh(
+    new THREE.SphereGeometry(.055*scale,12,8),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:.98,depthTest:true,depthWrite:false})
+  );
+  apex.renderOrder=5;
+  group.add(apex);
+  group.userData.lines=lines;
+  return group;
+}
+const startFrustum=makeFrustumGlyph(0xc78cff,.72);
+const endFrustum=makeFrustumGlyph(0xffd66f,.86);
+const liveFrustum=makeFrustumGlyph(0xffe08b,.92);
+const frustumAimCamera=new THREE.PerspectiveCamera(52,1.6,.05,80);
+scene.add(startFrustum,endFrustum,liveFrustum);
+
+function setFrustumPose(group,position,target,roll=0){
+  frustumAimCamera.position.copy(position);
+  frustumAimCamera.up.set(0,1,0);
+  frustumAimCamera.lookAt(target);
+  frustumAimCamera.rotateZ(roll||0);
+  group.position.copy(position);
+  group.quaternion.copy(frustumAimCamera.quaternion);
+}
+function syncFrustumVisuals(showAuthoring){
+  const s=shot();
+  const total=shotDuration(s);
+  const startState=cameraStateAt(s,0);
+  const endState=cameraStateAt(s,total);
+
+  startFrustum.visible=showAuthoring;
+  endFrustum.visible=showAuthoring;
+  liveFrustum.visible=showAuthoring && pilotState.active;
+
+  if(showAuthoring){
+    setFrustumPose(startFrustum,startState.position,startState.target,startState.roll);
+    setFrustumPose(endFrustum,endState.position,endState.target,endState.roll);
+
+    if(pilotState.active){
+      setFrustumPose(
+        liveFrustum,
+        camera.position,
+        targetFor(s).clone(),
+        s.roll||0
+      );
+    }
+  }
+}
 let pathVisualKey='';
 
 function replaceSharedPathGeometry(line,dots,points){
@@ -359,6 +445,7 @@ function syncWorldPathVisual(force=false){
   const showAuthoring=!playing && !navigationMode;
   authoredPathLine.visible=authoredPathDots.visible=showAuthoring;
   livePathLine.visible=livePathDots.visible=showAuthoring && pilotState.active;
+  syncFrustumVisuals(showAuthoring);
 
   if(showAuthoring){
     const authored=(s.points||[]).map(p=>new THREE.Vector3(p[0],p[1],p[2]));
