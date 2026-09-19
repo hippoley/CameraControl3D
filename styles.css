@@ -1181,3 +1181,36 @@ input[type=range]::-moz-range-thumb{
   .mini-view{height:135px}
   .hero-control,.sidebar-control{min-height:54px}
 }
+
+
+.camera-preference{
+  margin-top:9px;
+  padding:10px 10px 9px;
+  border:1px solid #292832;
+  border-radius:11px;
+  background:#141419;
+}
+.preference-head,
+.preference-scale{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.preference-head{
+  margin-bottom:7px;
+  color:#aaa4b1;
+  font-size:9px;
+}
+.preference-head b{
+  color:#e6dcff;
+  font:700 9px ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.camera-preference input[type=range]{
+  width:100%;
+}
+.preference-scale{
+  margin-top:5px;
+  color:#6f6977;
+  font-size:7.5px;
+}
